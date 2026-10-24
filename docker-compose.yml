@@ -48,8 +48,12 @@ services:
       AQS_LOG_LEVEL: INFO
       AQS_DEV_FIXTURE_REPOS: "true"
       AQS_FIXTURES_DIR: /fixtures
+      # The scheduler plans repository checks only when the Execution Service is enabled.
+      AQS_EXEC_TOKEN: ${AQS_EXEC_TOKEN:?set AQS_EXEC_TOKEN in .env (any long random string)}
+      AQS_EVIDENCE_DIR: /data/evidence
     volumes:
       - ./exec/fixtures:/fixtures:ro
+      - evidence:/data/evidence
     command: python -m qaswarm.workflow.scheduler
     depends_on:
       api:

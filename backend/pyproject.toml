@@ -17,6 +17,7 @@ dependencies = [
   "python-ulid>=3.0,<4",
   "sse-starlette>=2.1,<3",
   "jsonschema>=4.23,<5",
+  "httpx>=0.27,<0.29",  # API Testing agent (AG-04) and the exec host client
 ]
 
 [project.optional-dependencies]
