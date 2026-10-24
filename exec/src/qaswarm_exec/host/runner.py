@@ -9,6 +9,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -23,6 +24,20 @@ def _flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def engine_settings_from_env() -> dict[str, Any]:
+    """Phase 4 worker settings: controlled local-testing mode and performance caps."""
+    out: dict[str, Any] = {"allow_local_targets": _flag("AQS_EXEC_ALLOW_LOCAL_TARGETS")}
+    for key, env in (
+        ("perf_max_requests", "AQS_EXEC_PERF_MAX_REQUESTS"),
+        ("perf_max_concurrency", "AQS_EXEC_PERF_MAX_CONCURRENCY"),
+        ("perf_max_duration_seconds", "AQS_EXEC_PERF_MAX_DURATION_SECONDS"),
+    ):
+        raw = os.environ.get(env)
+        if raw and raw.strip().isdigit():
+            out[key] = int(raw)
+    return out
+
+
 def build_worker(
     *,
     control_plane_url: str,
@@ -32,6 +47,7 @@ def build_worker(
     worker_id: str | None = None,
     workspace_root: str | None = None,
     heartbeat_seconds: float = 30.0,
+    engine_settings: dict[str, Any] | None = None,
 ) -> ExecWorker:
     http = httpx.Client(base_url=control_plane_url.rstrip("/"), timeout=60.0)
     client = ControlPlaneClient(http, token)
@@ -43,6 +59,9 @@ def build_worker(
         allow_code_execution=allow_code_execution,
         fixtures_dir=fixtures_dir,
         heartbeat_seconds=heartbeat_seconds,
+        engine_settings=engine_settings
+        if engine_settings is not None
+        else engine_settings_from_env(),
     )
 
 

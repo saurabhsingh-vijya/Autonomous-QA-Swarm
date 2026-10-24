@@ -92,7 +92,7 @@ def test_fixture_fetcher_copies_ref_and_rejects_moved_content(tmp_path: Path) ->
 
 # ------------------------------------------------------------------- engines
 def test_registry_lists_four_engines_and_rejects_unknown() -> None:
-    assert set(ENGINES) == {"snapshot_integrity", "python_syntax", "secret_scan", "pytest"}
+    assert {"snapshot_integrity", "python_syntax", "secret_scan", "pytest"} <= set(ENGINES)
     assert get_engine("secret_scan").engine_id == "secret_scan"
     with pytest.raises(UnknownEngine):
         get_engine("nope")

@@ -1,0 +1,43 @@
+kind: api
+name: items-api
+data:
+  item_name: widget
+scenarios:
+  - name: health
+    steps:
+      - name: health endpoint
+        request: { method: GET, path: /health }
+        expect:
+          - status: 200
+          - json_path: { path: "$.status", equals: ok }
+          - header: { name: content-type, contains: application/json }
+          - response_time_ms: { lt: 5000 }
+  - name: create and fetch an item
+    steps:
+      - name: list seed items
+        request: { method: GET, path: /api/items }
+        expect:
+          - status: 200
+          - json_path: { path: "$.items.length()", gte: 1 }
+          - json_path: { path: "$.items[0].name", equals: seed-item }
+      - name: create item
+        request:
+          method: POST
+          path: /api/items
+          json: { name: "${item_name}" }
+        expect:
+          - status: 201
+          - json_path: { path: "$.id", exists: true }
+        capture:
+          item_id: "$.id"
+      - name: fetch created item
+        request: { method: GET, path: "/api/items/${item_id}" }
+        expect:
+          - status: 200
+          - json_path: { path: "$.name", equals: "${item_name}" }
+          - body_contains: "${item_name}"
+      - name: missing item is 404
+        request: { method: GET, path: /api/items/999999 }
+        expect:
+          - status: 404
+          - json_path: { path: "$.error", equals: not_found }
