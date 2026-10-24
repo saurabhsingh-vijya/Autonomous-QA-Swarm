@@ -1,7 +1,9 @@
 import { Download, ExternalLink } from "lucide-react";
+import { Link } from "react-router-dom";
 import { reportHtmlUrl } from "../api/client";
 import { useQualityGates, useReport } from "../api/hooks";
-import type { QualityGate, Verdict } from "../api/types";
+import type { FindingByPriority, QualityGate, Verdict } from "../api/types";
+import { SeverityChip } from "../components/SeverityChip";
 import {
   Badge,
   Button,
@@ -187,6 +189,71 @@ export function ReportsScreen() {
                 ]}
               />
             </section>
+
+            {r ? (
+              <section className="card" aria-labelledby="priority-heading">
+                <div className="flex flex-wrap items-center gap-2 border-b border-line px-3.5 py-2.5">
+                  <h2 id="priority-heading" className="text-sm font-semibold text-text">
+                    Findings by priority
+                  </h2>
+                  {r.content.finding_summary ? (
+                    <span className="text-xs text-muted">
+                      {r.content.finding_summary.open ?? 0} open ·{" "}
+                      {r.content.finding_summary.excluded ?? 0} excluded from gates
+                    </span>
+                  ) : null}
+                </div>
+                {r.content.findings_by_priority?.length ? (
+                  <DataTable<FindingByPriority>
+                    caption="Findings by priority"
+                    rows={r.content.findings_by_priority}
+                    rowKey={(x) => x.id}
+                    columns={[
+                      {
+                        key: "id",
+                        header: "Finding",
+                        render: (x) => (
+                          <Link to={`/defects?job=${jobId}&finding=${x.id}`} className="link">
+                            <span className="mono text-muted">{x.display_id}</span> {x.title}
+                          </Link>
+                        ),
+                      },
+                      {
+                        key: "severity",
+                        header: "Severity",
+                        render: (x) => <SeverityChip severity={x.severity} />,
+                      },
+                      {
+                        key: "confidence",
+                        header: "Confidence",
+                        render: (x) => <StatusBadge state={x.confidence} />,
+                      },
+                      {
+                        key: "status",
+                        header: "Status",
+                        render: (x) => <StatusBadge state={x.status} />,
+                      },
+                      {
+                        key: "dcs",
+                        header: "DCS",
+                        render: (x) => <span className="tabular-nums">{x.dcs}</span>,
+                      },
+                      {
+                        key: "priority",
+                        header: "Priority",
+                        render: (x) => (
+                          <span className="tabular-nums font-medium">{x.risk_priority}</span>
+                        ),
+                      },
+                    ]}
+                  />
+                ) : (
+                  <p className="px-3.5 py-3 text-sm text-muted">
+                    No finding was recorded for this job.
+                  </p>
+                )}
+              </section>
+            ) : null}
 
             {r ? (
               <section className="card p-4" aria-labelledby="narrative-heading">

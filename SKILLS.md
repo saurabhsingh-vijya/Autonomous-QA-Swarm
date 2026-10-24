@@ -19,7 +19,7 @@ and no evidence, no defect.
 | AG-05 Security Testing | — | — | — | Deterministic + LLM | Planned, slice 2a |
 | AG-06 Performance Testing | — | — | — | Deterministic + LLM | Planned, slice 3b |
 | AG-07 Mutation Testing | — | — | — | Deterministic + LLM | Planned, slice 3c |
-| AG-08 Evidence and Defect Analysis | Group failures by fingerprint, score with the Defect Confidence Score (DCS), separate verified facts from inferences | Executions and evidence from AG-03/AG-04 | `Finding` rows (candidate; probable at most without reproduction) | Deterministic | Implemented |
+| AG-08 Evidence and Defect Analysis | Group failures by fingerprint without discarding results, score with the Defect Confidence Score (DCS), separate verified facts from inferences, suggest rule-based root causes with uncertainty, compute risk priority, link recurrences across runs | Executions and evidence from AG-03/AG-04, earlier findings on the same repository | `Finding` records (candidate; probable at most without reproduction; suppressed when a recent false positive matches) | Deterministic | Implemented |
 | AG-09 Patch Proposal | — | — | — | LLM-assisted | Planned, slice 3d |
 | AG-10 Independent Verification | — | — | — | Deterministic + LLM | Planned, slice 3d |
 | AG-11 QA Report | Aggregate persisted records, evaluate quality gates QG-01…QG-08, compute the verdict, write a labelled deterministic narrative | All upstream outputs | `Report` (json/html), gate results | Deterministic | Implemented (QG-05/06/07 report `not_applicable`) |
@@ -48,7 +48,9 @@ extra scenario proposals. Hosted providers are not supported. See `.env.example`
 | Approve or reject a plan (QA Lead) | Job detail, `POST /api/v1/jobs/{id}/plan/approval` | Implemented |
 | Follow a job live (state, tasks, attempts, outputs, events) | Live Job Execution screen, SSE `/jobs/{id}/events` | Implemented |
 | Cancel a running job | Job detail, `POST /api/v1/jobs/{id}/cancel` | Implemented |
-| Inspect executions, evidence, findings with DCS breakdown | Results and defect screens, `/test-executions`, `/evidence`, `/findings` | Implemented |
+| Inspect executions, evidence, findings with DCS breakdown, root-cause hypotheses, priority and cross-run history | Results and defect screens, `/test-executions`, `/evidence`, `/findings`, `/findings/{id}/history` | Implemented |
+| Triage findings: false positive, duplicate, accept risk with expiry, reopen (role-checked, audited) | Defect screen, `POST /findings/{id}/triage` | Implemented |
+| Request reproduction, propose/review/verify patches | — | `501`: need sandbox (1c/2b) and source (3d) |
 | Read quality gates, verdict and report (JSON/HTML) | Reports screen, `/quality-gates`, `/report` | Implemented |
 | Source intake (SSRF-safe validation, ref pinning, snapshot) | — | Slice 1b |
 | Sandboxed execution of repository tests | — | Slice 1c |

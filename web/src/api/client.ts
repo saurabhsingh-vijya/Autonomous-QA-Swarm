@@ -3,6 +3,7 @@ import type {
   Capabilities,
   EvidenceItem,
   Finding,
+  FindingFilters,
   Job,
   JobCreate,
   JobDetail,
@@ -16,6 +17,7 @@ import type {
   ProjectUpdate,
   QualityGates,
   Report,
+  TriageRequest,
   Repository,
   RepositoryCreate,
   TaskRecord,
@@ -23,6 +25,11 @@ import type {
 } from "./types";
 
 export const API_BASE = "/api/v1";
+
+/** ETag format the API uses for mutable resources: `"<id>:v<version>"`. */
+export function etagFor(id: string, version: number): string {
+  return `"${id}:v${version}"`;
+}
 export const DEV_USER = "dev-qa-lead";
 export const DEV_ROLE = "QA Lead";
 
@@ -141,8 +148,24 @@ export const api = {
     request<Paginated<TestExecution>>(
       `/jobs/${jobId}/test-executions${status?.length ? `?status=${status.join(",")}` : ""}`,
     ),
-  listFindings: (jobId: string) => request<Paginated<Finding>>(`/jobs/${jobId}/findings`),
+  listFindings: (jobId: string, filters: FindingFilters = {}) => {
+    const q = new URLSearchParams();
+    if (filters.severity?.length) q.set("severity", filters.severity.join(","));
+    if (filters.confidence?.length) q.set("confidence", filters.confidence.join(","));
+    if (filters.status?.length) q.set("status", filters.status.join(","));
+    const qs = q.toString();
+    return request<Paginated<Finding>>(`/jobs/${jobId}/findings${qs ? `?${qs}` : ""}`);
+  },
   getFinding: (findingId: string) => request<Finding>(`/findings/${findingId}`),
+  getFindingHistory: (findingId: string) =>
+    request<Paginated<Finding>>(`/findings/${findingId}/history`),
+  /** Sends `If-Match` built from the version the caller last read, so a stale read is a 412. */
+  triageFinding: (findingId: string, version: number, body: TriageRequest) =>
+    request<Finding>(`/findings/${findingId}/triage`, {
+      method: "POST",
+      headers: { "If-Match": etagFor(findingId, version) },
+      body: JSON.stringify(body),
+    }),
   listFindingEvidence: (findingId: string) =>
     request<Paginated<EvidenceItem>>(`/findings/${findingId}/evidence`),
   listJobEvidence: (jobId: string) => request<Paginated<EvidenceItem>>(`/jobs/${jobId}/evidence`),

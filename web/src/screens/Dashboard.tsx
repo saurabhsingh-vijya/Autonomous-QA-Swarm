@@ -121,12 +121,14 @@ function LatestOutcome({ job }: { job: Job | undefined }) {
         to={`/results/api?job=${job.id}`}
       />
       <Tile
-        label={`Findings · ${job.display_id}`}
-        value={findingRows.length}
+        label={`Open findings · ${job.display_id}`}
+        value={
+          findingRows.filter((f) => f.status === "candidate" || f.status === "reopened").length
+        }
         loading={loading}
         note={
           findingRows.length
-            ? `${findingRows.filter((f) => f.confidence === "confirmed").length} confirmed`
+            ? `${findingRows.length} recorded, ${findingRows.filter((f) => f.confidence === "confirmed").length} confirmed`
             : "No finding recorded"
         }
         to={`/defects?job=${job.id}`}

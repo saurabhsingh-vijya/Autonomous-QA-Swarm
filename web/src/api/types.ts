@@ -386,7 +386,113 @@ export interface TestExecution {
   created_at: string;
 }
 
-export type Confidence = "confirmed" | "probable" | "possible" | "unverified" | string;
+export type Confidence =
+  | "confirmed"
+  | "probable"
+  | "candidate"
+  | "rejected"
+  | "possible"
+  | "unverified"
+  | string;
+
+export type Uncertainty = "low" | "medium" | "high";
+
+export interface RootCauseHypothesis {
+  hypothesis: string;
+  basis: string;
+  uncertainty: Uncertainty;
+  supporting_evidence: string[];
+  source: string;
+  verified: boolean;
+}
+
+export interface PriorityBreakdown {
+  formula: string;
+  severity: string;
+  severity_weight: number;
+  confidence: string;
+  confidence_factor: number;
+  exposure: string;
+  exposure_factor: number;
+  value: number;
+  note: string;
+}
+
+export interface PriorOccurrence {
+  finding_id: string;
+  display_id: string;
+  job_id: string;
+  job_display_id: string;
+  job_ref: string;
+  status: FindingStatus;
+  confidence: Confidence;
+  dcs: number;
+  seen_at: string;
+}
+
+export interface FindingHistory {
+  prior_occurrences?: PriorOccurrence[];
+  times_seen_before?: number;
+  first_seen?: PriorOccurrence | null;
+  recurring?: boolean;
+  scope?: string;
+}
+
+export interface StatusHistoryEntry {
+  from: string | null;
+  to: string;
+  action: string;
+  at: string;
+  actor_id: string;
+  role: string;
+  reason: string | null;
+}
+
+export interface TriageRecord {
+  action?: string;
+  reason?: string | null;
+  actor_id?: string;
+  role?: string;
+  at?: string;
+  expires_at?: string | null;
+  duplicate_of?: string | null;
+}
+
+export interface AffectedTest {
+  execution_id: string;
+  name: string;
+  scenario_id: string | null;
+  status: TestStatus | string;
+  test_type: string;
+}
+
+export interface Reproducibility {
+  attempted?: boolean;
+  runs?: number;
+  reproduced?: number;
+  fresh_workers?: boolean;
+  note?: string;
+}
+
+export type TriageAction =
+  | "mark_false_positive"
+  | "accept_risk"
+  | "mark_duplicate"
+  | "reopen"
+  | "request_reproduction";
+
+export interface TriageRequest {
+  action: TriageAction;
+  reason?: string | null;
+  duplicate_of?: string | null;
+  expires_at?: string | null;
+}
+
+export interface FindingFilters {
+  severity?: string[];
+  confidence?: string[];
+  status?: string[];
+}
 
 export interface Finding {
   id: string;
@@ -406,8 +512,30 @@ export interface Finding {
   inferred: { items?: string[] };
   evidence_ids: { items?: string[] };
   test_execution_ids: { items?: string[] };
+  description?: string;
+  affected_tests?: { items?: AffectedTest[] };
+  reproducibility?: Reproducibility;
+  root_causes?: { items?: RootCauseHypothesis[] };
+  risk_priority?: number;
+  priority_breakdown?: PriorityBreakdown | Record<string, never>;
+  history?: FindingHistory;
+  status_history?: { items?: StatusHistoryEntry[] };
+  triage?: TriageRecord;
+  duplicate_of?: string | null;
+  disputed?: boolean;
   created_at: string;
   version: number;
+}
+
+export interface FindingByPriority {
+  id: string;
+  display_id: string;
+  title: string;
+  severity: Severity;
+  confidence: Confidence;
+  status: FindingStatus;
+  dcs: number;
+  risk_priority: number;
 }
 
 export interface EvidenceItem {
@@ -454,6 +582,8 @@ export interface ReportContent {
   narrative: string;
   narrative_source: string;
   generated_at?: string;
+  finding_summary?: Record<string, number>;
+  findings_by_priority?: FindingByPriority[];
   [k: string]: unknown;
 }
 

@@ -65,8 +65,25 @@ export const STATE_TONES: Record<string, Tone> = {
   // Finding confidence
   confirmed: "green",
   probable: "blue",
+  candidate: "amber",
+  rejected: "grey",
   possible: "amber",
   unverified: "grey",
+  // Finding statuses
+  triaging: "blue",
+  reproducing: "indigo",
+  not_reproducible: "slate",
+  false_positive: "grey",
+  duplicate: "slate",
+  accepted_risk: "violet",
+  fix_proposed: "indigo",
+  fix_verified: "green",
+  fix_failed: "red",
+  reopened: "orange",
+  // Hypothesis uncertainty
+  low: "green",
+  medium: "amber",
+  high: "red",
   // Repository validation
   pending_validation: "amber",
   valid: "green",

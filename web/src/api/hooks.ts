@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, api, eventsUrl, probe } from "./client";
 import type {
+  Finding,
+  FindingFilters,
   JobCreate,
   JobEvent,
   JobListParams,
   ProjectCreate,
   ProjectUpdate,
   RepositoryCreate,
+  TriageRequest,
 } from "./types";
 
 export const keys = {
@@ -134,12 +137,36 @@ export const useExecutions = (jobId: string | undefined, status?: string[]) =>
     enabled: Boolean(jobId),
   });
 
-export const useFindings = (jobId: string | undefined) =>
+export const useFindings = (jobId: string | undefined, filters: FindingFilters = {}) =>
   useQuery({
-    queryKey: keys.results(jobId ?? "", "findings"),
-    queryFn: () => api.listFindings(jobId!),
+    queryKey: keys.results(jobId ?? "", `findings:${JSON.stringify(filters)}`),
+    queryFn: () => api.listFindings(jobId!, filters),
     enabled: Boolean(jobId),
   });
+
+export const useFindingHistory = (findingId: string | undefined) =>
+  useQuery({
+    queryKey: [...keys.finding(findingId ?? ""), "history"],
+    queryFn: () => api.getFindingHistory(findingId!),
+    enabled: Boolean(findingId),
+  });
+
+/**
+ * Triage mutation. The version comes from the finding row the screen rendered, so the
+ * `If-Match` header reflects what the user actually looked at.
+ */
+export function useTriageFinding(jobId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ finding, body }: { finding: Finding; body: TriageRequest }) =>
+      api.triageFinding(finding.id, finding.version, body),
+    onSettled: (_data, _err, vars) => {
+      qc.invalidateQueries({ queryKey: keys.finding(vars.finding.id) });
+      if (jobId) qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      qc.invalidateQueries({ queryKey: ["findings"] });
+    },
+  });
+}
 
 export const useFindingEvidence = (findingId: string | undefined) =>
   useQuery({

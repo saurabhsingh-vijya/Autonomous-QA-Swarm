@@ -262,7 +262,7 @@ describe("result screens", () => {
     expect(
       within(screen.getByLabelText("Inferred notes")).getByText(/Inference:/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Triage decisions .* arrive in slice 2b/)).toBeInTheDocument();
+    expect(screen.getByText(/Request reproduction: needs a fresh sandbox/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /View evidence \(1\)/ }));
     await screen.findByRole("dialog", { name: /Evidence evd_02/ });
   });

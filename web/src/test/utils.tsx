@@ -448,12 +448,155 @@ export const findingsFixture = {
       inferred: { items: ["Inference: the route may not be registered on this target."] },
       evidence_ids: { items: ["evd_02"] },
       test_execution_ids: { items: ["tex_02"] },
+      description:
+        "GET http://localhost:8000/missing returned HTTP 404 while the contract expects 200. Observed in 1 execution(s) of this job with 1 captured HTTP exchange(s). Each execution remains listed under affected_tests; grouping does not discard any result.",
+      affected_tests: {
+        items: [
+          {
+            execution_id: "tex_02",
+            name: "GET http://localhost:8000/missing responds 200",
+            scenario_id: "SCN-API-002",
+            status: "failed",
+            test_type: "api",
+          },
+        ],
+      },
+      reproducibility: {
+        attempted: false,
+        runs: 0,
+        reproduced: 0,
+        fresh_workers: false,
+        note: "Not reproduced: fresh-sandbox reproduction runs arrive in slice 2b. Recorded inputs allow a manual replay.",
+      },
+      root_causes: {
+        items: [
+          {
+            hypothesis:
+              "The route is not registered at this path, or the contract path differs from the implementation.",
+            basis: "observed 404 where 200 was expected",
+            uncertainty: "medium",
+            supporting_evidence: ["evd_02"],
+            source: "deterministic rule",
+            verified: false,
+          },
+        ],
+      },
+      risk_priority: 2.4,
+      priority_breakdown: {
+        formula: "severity_weight * confidence_factor * exposure",
+        severity: "medium",
+        severity_weight: 4,
+        confidence: "probable",
+        confidence_factor: 0.6,
+        exposure: "external",
+        exposure_factor: 1,
+        value: 2.4,
+        note: "Sorting aid only; a low priority never removes a hard blocker.",
+      },
+      history: {
+        prior_occurrences: [
+          {
+            finding_id: "fnd_00",
+            display_id: "FND-0000",
+            job_id: "job_00",
+            job_display_id: "QA-0000",
+            job_ref: "main",
+            status: "candidate",
+            confidence: "probable",
+            dcs: 63,
+            seen_at: "2026-10-20T09:01:02Z",
+          },
+        ],
+        times_seen_before: 1,
+        first_seen: {
+          finding_id: "fnd_00",
+          display_id: "FND-0000",
+          job_id: "job_00",
+          job_display_id: "QA-0000",
+          job_ref: "main",
+          status: "candidate",
+          confidence: "probable",
+          dcs: 63,
+          seen_at: "2026-10-20T09:01:02Z",
+        },
+        recurring: true,
+        scope: "same repository, same organisation, exact fingerprint",
+      },
+      status_history: {
+        items: [
+          {
+            from: null,
+            to: "candidate",
+            action: "created",
+            at: "2026-10-21T09:01:02Z",
+            actor_id: "AG-08",
+            role: "agent",
+            reason: null,
+          },
+        ],
+      },
+      triage: {},
+      duplicate_of: null,
+      disputed: false,
       created_at: "2026-10-21T09:01:02Z",
       version: 1,
     },
   ],
   next_cursor: null,
   limit: 1,
+};
+
+/** A finding already marked false positive (phase 5): only "reopen" is legal from here. */
+export function falsePositiveFindingFixture() {
+  const base = findingsFixture.items[0];
+  return {
+    ...base,
+    id: "fnd_02",
+    display_id: "FND-0002",
+    status: "false_positive",
+    confidence: "rejected",
+    risk_priority: 0,
+    triage: {
+      action: "mark_false_positive",
+      reason: "fixture route",
+      actor_id: "dev-qa-lead",
+      role: "QA Lead",
+      at: "2026-10-21T10:00:00Z",
+      expires_at: null,
+      duplicate_of: null,
+    },
+    status_history: {
+      items: [
+        ...base.status_history.items,
+        {
+          from: "candidate",
+          to: "false_positive",
+          action: "mark_false_positive",
+          at: "2026-10-21T10:00:00Z",
+          actor_id: "dev-qa-lead",
+          role: "QA Lead",
+          reason: "fixture route",
+        },
+      ],
+    },
+    version: 2,
+  };
+}
+
+export const findingHistoryFixture = {
+  items: [
+    findingsFixture.items[0],
+    {
+      ...findingsFixture.items[0],
+      id: "fnd_00",
+      display_id: "FND-0000",
+      job_id: "job_00",
+      history: { prior_occurrences: [], times_seen_before: 0, first_seen: null, recurring: false },
+      created_at: "2026-10-20T09:01:02Z",
+    },
+  ],
+  next_cursor: null,
+  limit: 2,
 };
 
 export const gatesFixture = {
@@ -546,6 +689,19 @@ export const reportFixture = {
     gates: gatesFixture.gates,
     test_summary: { passed: 1, failed: 1, skipped: 1, blocked: 1, executed: 2 },
     residual_risk: ["Functional scenarios were not executed (no engine)."],
+    finding_summary: { probable: 1, open: 1, excluded: 0 },
+    findings_by_priority: [
+      {
+        id: "fnd_01",
+        display_id: "FND-0001",
+        title: "GET http://localhost:8000/missing returned 404, expected 200",
+        severity: "medium",
+        confidence: "probable",
+        status: "candidate",
+        dcs: 63,
+        risk_priority: 2.4,
+      },
+    ],
     narrative: "One of two executed API checks failed.",
     narrative_source: "deterministic template (no LLM narrative in this build)",
     generated_at: "2026-10-21T09:01:05Z",
@@ -614,6 +770,7 @@ export function phase3Routes(job = finishedJobFixture()): Route[] {
     { match: `/jobs/${JOB_ID}/quality-gates`, body: gatesFixture },
     { match: `/jobs/${JOB_ID}/report`, body: reportFixture },
     { match: "/findings/fnd_01/evidence", body: evidenceFixture },
+    { match: "/findings/fnd_01/history", body: findingHistoryFixture },
     { match: `/jobs/${JOB_ID}`, body: job },
     { match: "/jobs", body: { items: [job], next_cursor: null, limit: 50 } },
   ];

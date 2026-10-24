@@ -130,7 +130,8 @@ web job with `npm ci`, lint, format check, typecheck, tests and build.
 | `POST /api/v1/jobs` | Requires `Idempotency-Key`. Same key + same body within 24 h replays the original response (`Idempotent-Replayed: true`); same key + different body → `422 idempotency_key_reused`; active job for the same repository + ref + profiles → `409 job_duplicate_active` with `existing_job` unless `force_new=true` by a QA Lead. Body accepts `inputs: {requirements: [..], api_checks: [{method,url,expected_status,priority}]}` and `require_plan_approval`. With inputs the job is planned and runs (`running`, or `awaiting_approval` for HA-05); without inputs it is held in `validating`. |
 | `GET /api/v1/jobs/{id}/plan`, `POST /api/v1/jobs/{id}/plan/approval` | Persisted plan DAG with hash; approve/reject (QA Lead only, reject needs a reason and cancels the job). |
 | `GET /api/v1/jobs/{id}/tasks` | Tasks with attempts and schema-validated agent outputs (adapter, model ref, hashes, tokens, duration, payload). |
-| `GET /api/v1/jobs/{id}/test-executions[?status=]`, `/findings`, `/evidence`, `GET /api/v1/findings/{id}[/evidence]` | Persisted executions (six statuses plus `blocked`), findings with DCS breakdown and facts/inferred separation, content-addressed evidence with redacted headers. |
+| `GET /api/v1/jobs/{id}/test-executions[?status=]`, `/findings[?severity=&confidence=&status=]`, `/evidence`, `GET /api/v1/findings/{id}[/evidence|/history]` | Persisted executions (six statuses plus `blocked`); findings sorted by risk priority with DCS breakdown, facts vs inferred, rule-based root-cause hypotheses with uncertainty, affected tests, reproducibility record, cross-run history; content-addressed evidence with redacted headers. |
+| `POST /api/v1/findings/{id}/triage` | `mark_false_positive`, `mark_duplicate`, `accept_risk` (expiry, HA-08), `reopen`; role-checked, reason required, `If-Match` ETag, audited. `request_reproduction` → `501` (needs sandbox). |
 | `GET /api/v1/jobs/{id}/quality-gates`, `GET /api/v1/jobs/{id}/report?format=json\|html` | QG-01…QG-08 with `inconclusive`/`not_applicable` honesty, verdict, deterministic narrative. |
 | `GET /api/v1/system/agents`, `GET /api/v1/system/capabilities` | Agent registry (implemented vs planned slice, kind, adapter, LLM provider) and build capabilities. |
 | `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}` | Cursor pagination; filters `state` (comma-separated), `repository_id`, `project_id`; `ETag` on detail. |
@@ -150,6 +151,7 @@ Errors are `application/problem+json` with `type`, `title`, `status`, `detail`, 
 | 1c Sandbox execution | Execution Service, disposable gVisor workers, limits, cleanup | Not started |
 | 1d Results and live job | pytest end-to-end, six statuses, flaky reruns, reports, results UI | Not started |
 | Phase 3 Orchestration | Orchestrator, agent roles, plan DAG, runner, persisted outputs, findings, gates, report, HA-05 | **Built (deterministic adapters)** — see `docs/build/phase-3-report.md` |
+| Phase 5 Defect intelligence | Defect records with evidence, root-cause hypotheses (unverified, with uncertainty), risk priority, cross-run history, suppression carry-over, triage (HA-07/HA-08) with audit and ETag | **Built** — patches/verification stay `501` (need source + sandbox); see `docs/build/phase-5-report.md` |
 | 2a–2d, 3a–3e | See `docs/build/BUILD_PLAN.md` | Not started |
 
 ## Non-negotiable rules (from `CLAUDE.md`)
