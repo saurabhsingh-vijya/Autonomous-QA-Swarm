@@ -1,7 +1,8 @@
 """Job creation (idempotent, duplicate-safe), listing, cancel and the SSE event source.
 
-Jobs are created ``created`` → ``validating`` and held there: source intake arrives in slice 1b.
-Nothing is executed and no later state is fabricated.
+Jobs are created ``created`` → ``validating`` and held for the scheduler, which runs Intake &
+Pinning, plans the combined DAG (Execution Service checks + agent tasks) and advances the job
+from its tasks. Nothing is executed here and no later state is fabricated.
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ from qaswarm.db.models import (
     CheckRun,
     IdempotencyRecord,
     Job,
+    JobPlan,
     Organization,
     OutboxEvent,
+    Report,
     Repository,
     TargetEnvironment,
     Task,
@@ -127,30 +130,30 @@ def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
             elif terminal:
                 status, note = "failed" if job.state == JobState.FAILED.value else "not_run", None
         elif stage == "planning":
-            if past_planning:
-                status, note = "succeeded", "template plan"
+            if job.state == JobState.AWAITING_APPROVAL.value:
+                status, note = "awaiting_approval", job.held_reason
+            elif stage in by_stage:
+                status, note = _stage_from_tasks(by_stage[stage])
+                note = note or "plan persisted · requirements analysis (AG-02)"
+            elif past_planning:
+                status, note = "succeeded", "combined plan (checks + agents)"
             elif job.state == JobState.PLANNING.value:
                 status = "running"
             elif terminal:
                 status = "not_run"
         elif stage in by_stage:
             status, note = _stage_from_tasks(by_stage[stage])
+            agents = sorted({t.agent_id for t in by_stage[stage] if t.agent_id})
+            if agents and not note:
+                note = "agents " + ", ".join(agents)
         elif stage == "evidence_correlation_and_triage":
             if job.state == JobState.ANALYZING.value:
                 status = "running"
-            elif job.state in {
-                JobState.REPORTING.value,
-                JobState.COMPLETED.value,
-                JobState.COMPLETED_WITH_WARNINGS.value,
-            }:
-                status, note = "succeeded", "no findings engine yet (slice 2b)"
             elif terminal:
                 status = "not_run"
         elif stage == "quality_gates_and_reporting":
             if job.state == JobState.REPORTING.value:
                 status = "running"
-            elif job.state in {JobState.COMPLETED.value, JobState.COMPLETED_WITH_WARNINGS.value}:
-                status, note = "succeeded", "report stored · gates arrive in slice 2d"
             elif terminal:
                 status, note = (
                     "not_run",
@@ -160,7 +163,7 @@ def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
             if terminal:
                 status = "succeeded" if job.state != JobState.BLOCKED.value else "not_run"
         elif past_planning:
-            status, note = "skipped", "not in plan"
+            status, note = "not_planned", "not in plan (no engine for this stage yet)"
         elif terminal:
             status, note = "not_run", None
         stages.append(
@@ -184,15 +187,29 @@ def to_detail(session: Session, job: Job) -> JobDetailOut:
         .where(TestExecution.job_id == job.id)
         .group_by(TestExecution.status)
     ).all()
+    report_available = (
+        session.execute(
+            select(func.count()).select_from(Report).where(Report.job_id == job.id)
+        ).scalar_one()
+        > 0
+    )
+    plan_available = (
+        session.execute(
+            select(func.count()).select_from(JobPlan).where(JobPlan.job_id == job.id)
+        ).scalar_one()
+        > 0
+    )
     return JobDetailOut.model_validate(
         {
             **_columns(job),
             "links": _links(job),
-            "warnings": list(job.warnings.get("items", [])),
+            "warnings": list((job.warnings or {}).get("items", [])),
             "stages": _stages(job, tasks),
             "task_summary": counts,
             "check_summary": {str(k): int(n) for k, n in check_rows},
             "test_summary": {str(k): int(n) for k, n in test_rows},
+            "report_available": report_available,
+            "plan_available": plan_available,
         }
     )
 
@@ -242,10 +259,15 @@ def create_job(
         )
     repo = get_repository_row(session, principal, body.repository_id)
     profiles = body.profiles.model_dump(mode="json")
+    # Agent inputs (phase 3: requirements, API checks) and target-facing inputs (phase 4:
+    # target_id, testing) live side by side in one JSONB document; reruns carry it over.
     inputs = (
         inputs_override
         if inputs_override is not None
-        else job_inputs(session, principal, repo, body)
+        else {
+            **body.inputs.model_dump(mode="json"),
+            **job_inputs(session, principal, repo, body),
+        }
     )
     phash = profile_hash({**profiles, "inputs": inputs} if inputs else profiles)
 
@@ -290,6 +312,8 @@ def create_job(
         inputs=inputs,
         profile_hash=phash,
         state=JobState.CREATED.value,
+        require_plan_approval=body.require_plan_approval,
+        warnings={},
         force_new=body.force_new,
         created_by=principal.user_id,
         deadline_at=now + timedelta(seconds=settings.job_wall_clock_seconds),
@@ -337,27 +361,28 @@ def create_job(
     )
     job.held_reason = HELD_REASON
     job.current_stage = "intake_and_pinning"
-    append_event(
-        session,
-        org_id=job.org_id,
-        actor_type="service",
-        actor_id="workflow",
-        action="job.held",
-        subject_type="job",
-        subject_id=job.id,
-        job_id=job.id,
-        correlation_id=correlation_id,
-        details={"reason": HELD_REASON},
-    )
-    session.add(
-        OutboxEvent(
-            id=new_id("outbox_event"),
+    if job.held_reason:
+        append_event(
+            session,
             org_id=job.org_id,
+            actor_type="service",
+            actor_id="workflow",
+            action="job.held",
+            subject_type="job",
+            subject_id=job.id,
             job_id=job.id,
-            event_type="job.held",
-            payload={"job_id": job.id, "reason": HELD_REASON, "stage": "intake_and_pinning"},
+            correlation_id=correlation_id,
+            details={"reason": job.held_reason},
         )
-    )
+        session.add(
+            OutboxEvent(
+                id=new_id("outbox_event"),
+                org_id=job.org_id,
+                job_id=job.id,
+                event_type="job.held",
+                payload={"job_id": job.id, "reason": job.held_reason, "stage": job.current_stage},
+            )
+        )
 
     status = 202
     body_out = json.loads(to_out(job).model_dump_json())

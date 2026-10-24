@@ -1,10 +1,12 @@
-# CLAUDE.md — Autonomous QA Swarm
+# CLAUDE.md — RaOne
 
 Standing instructions for Claude Code in this repository. Read this file at the start of every session and follow it for every phase.
 
 ## What this project is
 
-Autonomous QA Swarm is an open-source, self-hostable QA platform. Specialized AI agents, coordinated by a deterministic workflow engine, plan and run tests against a **pinned commit** of a repository inside **disposable sandboxes**, correlate evidence, propose fixes for human review and independently verify them.
+**RaOne** (Autonomous AI-Powered QA Platform) is the permanent product name; "Autonomous QA Swarm" is the original concept name and appears only in historical design documents. Use "RaOne" for every visible brand, title, page metadata and user-facing document in every phase; keep technical identifiers (`qaswarm` / `qaswarm_exec` packages, `AQS_` settings, database names) unless a rename is explicitly requested. RaOne is local-first: no mandatory cloud services or external AI APIs.
+
+RaOne is an open-source, self-hostable QA platform. Specialized AI agents, coordinated by a deterministic workflow engine, plan and run tests against a **pinned commit** of a repository inside **disposable sandboxes**, correlate evidence, propose fixes for human review and independently verify them.
 
 Two principles override everything else:
 

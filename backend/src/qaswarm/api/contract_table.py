@@ -43,14 +43,18 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
     ContractEndpoint("GET", "/jobs/{job_id}", "Job details", "1a", True),
     ContractEndpoint("POST", "/jobs/{job_id}/cancel", "Request cancellation", "1a", True),
     ContractEndpoint("GET", "/jobs/{job_id}/events", "Server-Sent Events stream", "1a", True),
-    ContractEndpoint("GET", "/jobs/{job_id}/plan", "Job plan (DAG)", "2c"),
-    ContractEndpoint("POST", "/jobs/{job_id}/plan/approval", "Approve/reject plan (HA-05)", "2c"),
-    ContractEndpoint("GET", "/jobs/{job_id}/tasks", "Tasks with attempts and status", "1d", True),
-    ContractEndpoint("GET", "/jobs/{job_id}/test-executions", "Test results", "1d", True),
-    ContractEndpoint("GET", "/jobs/{job_id}/findings", "Findings", "2a"),
-    ContractEndpoint("GET", "/findings/{finding_id}", "Finding with evidence references", "2b"),
-    ContractEndpoint("POST", "/findings/{finding_id}/triage", "Change finding status", "2b"),
-    ContractEndpoint("GET", "/findings/{finding_id}/evidence", "Evidence items", "2b"),
+    ContractEndpoint("GET", "/jobs/{job_id}/plan", "Job plan (DAG)", "3", True),
+    ContractEndpoint(
+        "POST", "/jobs/{job_id}/plan/approval", "Approve/reject plan (HA-05)", "3", True
+    ),
+    ContractEndpoint("GET", "/jobs/{job_id}/tasks", "Tasks with attempts and status", "3", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/test-executions", "Test results", "3", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/findings", "Findings", "3", True),
+    ContractEndpoint(
+        "GET", "/findings/{finding_id}", "Finding with evidence references", "3", True
+    ),
+    ContractEndpoint("POST", "/findings/{finding_id}/triage", "Change finding status", "5", True),
+    ContractEndpoint("GET", "/findings/{finding_id}/evidence", "Evidence items", "3", True),
     ContractEndpoint("GET", "/jobs/{job_id}/performance-runs", "Performance runs", "3b"),
     ContractEndpoint("GET", "/jobs/{job_id}/mutation-runs", "Mutation runs", "3c"),
     ContractEndpoint("GET", "/jobs/{job_id}/patches", "Patch proposals", "3d"),
@@ -59,8 +63,8 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
         "POST", "/patches/{patch_id}/verifications", "Start independent verification", "3d"
     ),
     ContractEndpoint("GET", "/verifications/{verification_id}", "Verification result", "3d"),
-    ContractEndpoint("GET", "/jobs/{job_id}/quality-gates", "Quality gate results", "2d"),
-    ContractEndpoint("GET", "/jobs/{job_id}/report", "Report", "1d", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/quality-gates", "Quality gate results", "3", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/report", "Report", "3", True),
     ContractEndpoint(
         "POST", "/jobs/{job_id}/release-decision", "Record release decision (HA-10)", "2d"
     ),

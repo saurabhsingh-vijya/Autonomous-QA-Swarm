@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qa-swarm.dev/schemas/task_contract/1.0",
+  "$id": "https://raone.dev/schemas/task_contract/1.0",
   "title": "Task contract v1 (LLD: Task contract schema)",
   "type": "object",
   "additionalProperties": false,

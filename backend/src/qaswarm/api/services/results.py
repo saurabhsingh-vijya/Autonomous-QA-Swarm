@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from sqlalchemy import select
@@ -189,7 +190,13 @@ def evidence_content(
 ) -> tuple[EvidenceItem, bytes, EvidenceContentOut]:
     item = get_evidence(session, principal, evidence_id)
     try:
-        data = store.get(item.org_id, item.sha256)
+        if item.storage_key is None and item.content is not None:
+            # Agent evidence kept inline in the database (phase 3) without a stored object.
+            data = json.dumps(
+                item.content, sort_keys=True, separators=(",", ":"), default=str
+            ).encode()
+        else:
+            data = store.get(item.org_id, item.sha256)
     except FileNotFoundError as exc:
         raise Problem(404, "not_found", "Evidence object is missing from the store.") from exc
     except EvidenceIntegrityError as exc:

@@ -1,4 +1,6 @@
-# Autonomous QA Swarm
+# RaOne — Autonomous AI-Powered QA Platform
+
+(Originally "Autonomous QA Swarm"; `qaswarm` package names and `AQS_` settings are kept.)
 
 An open-source, self-hostable QA platform in which specialized AI agents, coordinated by a
 deterministic workflow engine, plan and run tests against a **pinned commit** inside **disposable
@@ -10,14 +12,20 @@ Two principles override everything else:
    never hold credentials and never change a repository.
 2. **No evidence, no defect.** Nothing is reported as a confirmed defect without reproducible evidence.
 
-> **Status: Phase 2 execution engine + Phase 4 target-facing engines, hardened in Phase 6. Not production-ready.**
-> What works: register a repository, create a job, Intake & Pinning (`git ls-remote` → commit
-> SHA), a template task plan, an Execution Service that fetches the pinned snapshot and runs four
-> deterministic checks, evidence (content-addressed, redacted), JSON/HTML reports, run comparison,
-> live SSE progress and a hash-chained audit trail. What does **not** exist yet: a sandbox runtime
-> (checks run in a plain subprocess on the worker host), OIDC login, findings, quality gates,
-> agents and the Model Gateway. Every missing endpoint answers `501` with its planned slice; see
-> [Known limitations](#known-limitations) and `docs/build/phase-6-report.md`.
+> **Status: Phase 2 execution engine + Phase 3 agent orchestration + Phase 4 target-facing
+> engines + Phase 5 defect intelligence, hardened in Phase 6. Not production-ready.**
+> What works: register a repository, create a job (optionally with requirement texts, API checks,
+> a target and a testing scope), Intake & Pinning (`git ls-remote` → commit SHA), one combined
+> plan (Execution Service checks + agent tasks), an Execution Service that fetches the pinned
+> snapshot and runs deterministic checks, deterministic agents (requirements analysis, API checks
+> against allow-listed local hosts, evidence correlation, quality gates and report), findings with
+> evidence, root-cause hypotheses, priority, cross-run history and triage, JSON/HTML reports, run
+> comparison, live SSE progress and a hash-chained audit trail. What does **not** exist yet: a
+> sandbox runtime (checks run in a plain subprocess on the worker host), OIDC login, reproduction
+> runs, patch proposals, a hosted Model Gateway (only an optional local Ollama adapter). Every
+> missing endpoint answers `501` with its planned slice; see [Known limitations](#known-limitations),
+> `docs/build/phase-6-report.md`, `docs/build/phase-3-report.md`, `docs/build/phase-5-report.md`
+> and `docs/build/merge-phase2-report.md`.
 
 The design is the source of truth: [`docs/design/`](docs/design/README.md). Build plan and phase
 prompts: [`docs/build/`](docs/build/BUILD_PLAN.md). Phase reports: `docs/build/phase-<id>-report.md`.
@@ -42,7 +50,10 @@ Release gate: [`docs/build/RELEASE-CHECKLIST.md`](docs/build/RELEASE-CHECKLIST.m
 | API | `backend/src/qaswarm/api` | `/api/v1`: projects, repositories, jobs (idempotent create, cancel, SSE), tasks, checks, test executions, evidence, report, compare, audit events, capabilities. RFC 9457 `problem+json`, correlation IDs, ETags, cursor pagination, security headers. Dev header auth only. |
 | Domain / workflow | `qaswarm.domain`, `qaswarm.workflow` | Enums and state machines exactly as the design defines them; PostgreSQL task queue (`FOR UPDATE SKIP LOCKED`, leases, heartbeats, retries with jittered backoff, reaper, dead-worker detection). |
 | Intake | `qaswarm.intake` | URL validation (https, allow-listed host, no credentials), DNS resolution with private-address rejection, `git ls-remote` with redirects disabled. Never clones. |
-| Planning / reporting | `qaswarm.planning`, `qaswarm.reporting` | Deterministic template plan from profiles; JSON report (canonical) and HTML rendering. |
+| Planning / reporting | `qaswarm.planning`, `qaswarm.reporting` | One combined plan per job: the deterministic template plan (Execution Service checks, target engines) joined with the agent DAG (requirements → functional/API → evidence → report); plan persisted with a hash, optional HA-05 approval. Deterministic partial report for failed/cancelled jobs. |
+| Agents (phase 3) | `qaswarm.agents` | AG-02 Requirements Analysis, AG-03 Functional Testing (skips honestly), AG-04 API Testing (local allow-list, safe methods), AG-08 Evidence Analysis (findings from API checks, failed check engines and failed pytest tests; DCS; facts vs inferences; rule-based root-cause hypotheses with uncertainty), AG-11 QA Reporting (QG-01…QG-08, verdict). Deterministic by default; optional local Ollama adapter for AG-02 proposals. Outputs are schema-validated and persisted. |
+| Orchestrator + runner | `qaswarm.workflow.orchestrator`, `.runner` | Plans jobs for the scheduler, dispatches leased agent tasks, persists outputs/evidence/executions/findings/report, reconciles job state (single state advancer), HA-05 approval, cancellation. In-process runner thread (`AQS_RUNNER_ENABLED=true`) or `python -m qaswarm.workflow.runner`. |
+| Defects (phase 5) | `qaswarm.defects` | Risk priority with breakdown, cross-run history by fingerprint, suppression carry-over, triage lifecycle (HA-07/HA-08) with audit and ETags. |
 | Evidence / audit | `qaswarm.evidence`, `qaswarm.audit` | Content-addressed files under `AQS_EVIDENCE_DIR`, redacted before hashing, capped at 50 MiB; append-only hash-chained audit events. |
 | Execution Service | `exec/src/qaswarm_exec` | Leases tasks over HTTP, fetches the pinned commit (`git fetch --depth 1`, hooks/LFS/submodules off, safe tar extract) or a dev fixture, runs engines `snapshot_integrity`, `python_syntax`, `secret_scan` (no code execution) and `pytest` (executes repository code; refused unless explicitly allowed), uploads evidence, submits a schema-validated result, always reports its worker run destroyed. No database access. |
 
@@ -143,6 +154,9 @@ with the endpoints that are still `501` (`not_implemented`).
 | `AQS_INTAKE_DNS_CHECK` | `true` | Resolve the host and reject private, loopback, link-local, CGNAT and reserved addresses before `git ls-remote`. |
 | `AQS_EVIDENCE_DIR` | `./data/evidence` | Evidence object store root (persistent volume in production). |
 | `AQS_CORS_ORIGINS` | `["http://localhost:5173"]` | Allowed browser origins. |
+| `AQS_RUNNER_ENABLED` / `AQS_RUNNER_POLL_SECONDS` | `true` / `1.0` | Agent runner inside the API process (phase 3); or run `python -m qaswarm.workflow.runner`. |
+| `AQS_API_ALLOWED_HOSTS` | `["localhost","127.0.0.1"]` | Hosts the API Testing agent may call with GET/HEAD/OPTIONS; everything else is recorded `blocked`. |
+| `AQS_LLM_PROVIDER` (`none` \| `ollama`), `AQS_LLM_BASE_URL`, `AQS_LLM_MODEL`, `AQS_LLM_TIMEOUT_SECONDS`, `AQS_LLM_RATE_LIMIT_PER_MINUTE` | `none` | Optional local model for AG-02 proposals. With `none` every agent output is labelled `deterministic`; hosted providers are not supported. |
 | Job/task limits | LLD defaults | `AQS_JOB_WALL_CLOCK_SECONDS` 4 h, `AQS_TASK_WALL_CLOCK_SECONDS` 30 min, `AQS_LEASE_TTL_SECONDS` 90, `AQS_HEARTBEAT_SECONDS` 30, `AQS_TASK_MAX_RETRIES` 2, `AQS_BACKOFF_SECONDS` `[30,120]` ± 20 %. |
 
 Execution Service process (`python -m qaswarm_exec`): `AQS_EXEC_TOKEN`, `AQS_EXEC_CONTROL_PLANE_URL`,
@@ -165,7 +179,17 @@ curl -s $H localhost:8000/api/v1/jobs/job_…/checks               # per-engine 
 curl -s $H "localhost:8000/api/v1/jobs/job_…/report?format=html" # self-contained HTML
 curl -s $H "localhost:8000/api/v1/jobs/job_…/compare?with=job_…"
 curl -s $H -X POST localhost:8000/api/v1/jobs/job_…/cancel -d '{"reason":"stop"}'
+# phase 3/5: agent inputs, plan, findings, gates
+curl -s $H -H "Idempotency-Key: $(uuidgen)" -X POST localhost:8000/api/v1/jobs -d '{"repository_id":"rep_…","ref":"main","inputs":{"requirements":["Health endpoint must respond"],"api_checks":[{"method":"GET","url":"http://localhost:8000/healthz","expected_status":200,"priority":"P0"}]}}'
+curl -s $H localhost:8000/api/v1/jobs/job_…/plan                 # persisted DAG (checks + agents)
+curl -s $H localhost:8000/api/v1/jobs/job_…/findings             # defect records, sorted by risk priority
+curl -s $H localhost:8000/api/v1/jobs/job_…/quality-gates        # QG-01…QG-08 and verdict
+curl -s $H -X POST localhost:8000/api/v1/findings/fnd_…/triage -d '{"action":"mark_false_positive","reason":"fixture route"}'
 ```
+
+A job **with** `inputs` whose ref cannot be pinned still runs its agent tasks (recorded as
+unpinned with a warning); a job with neither inputs nor a pinnable ref fails at intake. Without
+`AQS_EXEC_TOKEN` repository checks are not planned and only the agent tasks run.
 
 Outcomes: a check ends `passed | failed | skipped | error` (`error` = tool or infrastructure
 failure, never the code under test); tests use the six design statuses; a job ends
@@ -252,9 +276,12 @@ enable controlled local testing of registered loopback/private targets. Performa
 - **No real authentication.** Dev header auth or nothing; OIDC and RBAC are slice 3e. Do not expose
   the API beyond a trusted network.
 - **Single organization.** The principal is bound to the first organization in the database.
-- **Deterministic adapters only.** No agents, no Model Gateway, no findings, DCS, quality gates,
-  verdicts, patches, performance or mutation testing. `verdict` is always `null`; the report says
-  so. The 17 unbuilt contract endpoints answer `501 not_implemented` with their `planned_slice`.
+- **Deterministic adapters only.** Agents AG-02/03/04/08/11 run deterministic logic (optional
+  local Ollama for AG-02 proposals); no hosted Model Gateway. Findings are single-run (DCS 63,
+  Probable at most): no reproduction runs, no flaky register, no patch proposals or independent
+  verification, no mutation testing. Functional scenarios derived from supplied requirements are
+  recorded `skipped`; only the repository's own pytest suite executes (when allowed). Unbuilt
+  contract endpoints answer `501 not_implemented` with their `planned_slice`.
 - **Repository dependencies are not installed** before `pytest`; suites that need them end
   `error` with the log attached, never `passed`.
 - **Intake residual risk.** DNS is checked before `git ls-remote`, redirects are disabled, but a

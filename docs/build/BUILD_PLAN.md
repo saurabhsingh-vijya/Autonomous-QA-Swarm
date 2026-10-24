@@ -1,4 +1,4 @@
-# Build plan — Autonomous QA Swarm (phase-wise, for Claude Code)
+# Build plan — RaOne (formerly Autonomous QA Swarm) (phase-wise, for Claude Code)
 
 Each slice is one Claude Code session (roughly 1–3 hours of agent work). Finish and review a slice before starting the next. Each slice ends with a report in `docs/build/phase-<id>-report.md` and must meet its exit check before you move on.
 

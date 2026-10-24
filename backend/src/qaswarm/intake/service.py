@@ -32,8 +32,15 @@ def _emit(session: Session, job: Job, event_type: str, payload: dict[str, Any]) 
     )
 
 
-def run_intake(session: Session, job: Job, resolver: RefResolver) -> None:
-    """Pin the job's ref. On success the job is ``queued``; on failure ``failed`` or ``blocked``."""
+def run_intake(
+    session: Session, job: Job, resolver: RefResolver, *, allow_unpinned: bool = False
+) -> None:
+    """Pin the job's ref. On success the job is ``queued``; on failure ``failed`` or ``blocked``.
+
+    With ``allow_unpinned`` a non-policy intake failure does not fail the job: it is queued
+    without a commit (the job carries supplied inputs that agents can work on) and the
+    reason is recorded as a job warning and an audit event. Policy denials always block.
+    """
     repo = session.execute(
         select(Repository).where(Repository.id == job.repository_id)
     ).scalar_one()
@@ -44,6 +51,35 @@ def run_intake(session: Session, job: Job, resolver: RefResolver) -> None:
         job.current_stage = "intake_and_pinning"
         repo.validation_status = RepositoryValidationStatus.VALIDATION_FAILED.value
         repo.validation_note = f"{exc.code} {exc.reason}: {exc.detail}"
+        if allow_unpinned and not exc.policy:
+            note = (
+                f"Repository could not be pinned ({exc.code} {exc.reason}); repository checks "
+                "were not planned and only the supplied inputs were used."
+            )
+            items = list((job.warnings or {}).get("items", []))
+            job.warnings = {**(job.warnings or {}), "items": [*items, note]}
+            append_event(
+                session,
+                org_id=job.org_id,
+                actor_type="service",
+                actor_id="source_intake",
+                action="source.unpinned",
+                subject_type="job",
+                subject_id=job.id,
+                job_id=job.id,
+                details={"error_code": exc.code, "reason": exc.reason, "detail": exc.detail},
+            )
+            transition_job(
+                session,
+                job,
+                JobEvent.VALIDATION_PASSED,
+                actor_type="service",
+                actor_id="source_intake",
+                details={"commit_sha": None, "unpinned": exc.code},
+            )
+            _emit(session, job, "job.unpinned", {"error_code": exc.code, "reason": exc.reason})
+            log.warning("intake failed; continuing unpinned", extra={"job_id": job.id})
+            return
         event = JobEvent.POLICY_DENIED if exc.policy else JobEvent.INTAKE_ERROR
         transition_job(
             session,

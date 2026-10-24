@@ -21,19 +21,25 @@ from qaswarm.api.routers import (
     jobs,
     projects,
     repositories,
+    results,
     stubs,
     system,
     targets,
 )
 from qaswarm.config import Settings, get_settings
 from qaswarm.telemetry.logging import configure_logging
+from qaswarm.workflow.runner import Runner
 
 API_PREFIX = "/api/v1"
 log = logging.getLogger("qaswarm.api.app")
 
 
 def _start_embedded_roles(settings: Settings, stop: threading.Event) -> list[threading.Thread]:
-    """Local-development convenience: run the scheduler and one exec worker in-process."""
+    """Local-development convenience: run the scheduler and one exec worker in-process.
+
+    The agent runner (``AQS_RUNNER_ENABLED``) is started separately because it owns its own
+    thread lifecycle; the three roles are independent processes in production.
+    """
     threads: list[threading.Thread] = []
     if settings.embedded_scheduler:
         from qaswarm.workflow.scheduler import Scheduler
@@ -73,27 +79,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log.warning("configuration: %s", warning)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         stop = threading.Event()
         threads = _start_embedded_roles(settings, stop)
+        runner: Runner | None = None
+        if settings.runner_enabled:
+            runner = Runner(settings)
+            runner.start()
+        application.state.runner = runner
         try:
             yield
         finally:
             stop.set()
+            if runner is not None:
+                runner.stop()
             for t in threads:
                 t.join(timeout=10)
 
     app = FastAPI(
-        title="Autonomous QA Swarm API",
+        title="RaOne API",
         version=__version__,
         description=(
-            "Control-plane API. Phase 2: projects, repositories, idempotent job creation, Intake & "
-            "Pinning (git ls-remote), template planning, task leasing for the Execution Service, "
-            "check runs, test executions, evidence, reports, run comparison and the audit trail. "
-            "Phase 4: target environments with HA-01 attestations, API/browser/security/performance "
-            "checks against authorised targets, and regression reruns. "
-            "Endpoints not built yet return 501 with their planned slice. The control plane never "
-            "executes repository code."
+            "RaOne — Autonomous AI-Powered QA Platform. Control-plane API. Phase 2: projects, "
+            "repositories, idempotent job creation, Intake & Pinning (git ls-remote), task leasing "
+            "for the Execution Service, check runs, test executions, evidence, reports, run "
+            "comparison and the audit trail. Phase 3/5: a combined plan (Execution Service checks "
+            "+ agent tasks), agent orchestration (requirements, API checks, evidence correlation, "
+            "quality gates and report) and findings with triage. Phase 4: target environments "
+            "with HA-01 attestations, API/browser/security/performance checks against authorised "
+            "targets, and regression reruns. Endpoints not built yet return 501 with their "
+            "planned slice. The control plane never executes repository code."
         ),
         openapi_url=f"{API_PREFIX}/openapi.json",
         docs_url=f"{API_PREFIX}/docs",
@@ -125,6 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(repositories.router)
     api.include_router(targets.router)
     api.include_router(jobs.router)
+    api.include_router(results.router)
     api.include_router(evidence.router)
     api.include_router(audit.router)
     api.include_router(system.router)

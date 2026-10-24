@@ -1,9 +1,13 @@
-import { FileText } from "lucide-react";
-import type { CheckRun, EvidenceItem } from "../api/types.phase2";
+import { FileSearch } from "lucide-react";
+import type { CheckRun, EvidenceItem } from "../api/types";
 import { formatDuration } from "../lib/compare";
-import { DataTable } from "./DataTable";
-import { OutcomeBadge } from "./OutcomeBadge";
+import { StatusBadge } from "./StatusBadge";
+import { Button, DataTable } from "./ui";
 
+/**
+ * Check runs of the Execution Service engines for one job. Outcomes are the persisted values;
+ * each row links to the log and any other evidence object the engine uploaded.
+ */
 export function ChecksTable({
   checks,
   evidence,
@@ -23,60 +27,77 @@ export function ChecksTable({
         {
           key: "check",
           header: "Check",
+          sortValue: (c) => c.engine_id,
           render: (c) => (
             <div>
-              <div className="font-medium text-slate-900">{c.name}</div>
-              <div className="font-mono text-xs text-slate-500">
-                {c.engine_id} · {c.tool_version}
+              <div className="font-medium text-text">{c.name}</div>
+              <div className="mono text-2xs text-muted">
+                {c.engine_id} · {c.tool_name} {c.tool_version}
                 {c.executes_repository_code ? " · executes repository code" : ""}
               </div>
             </div>
           ),
         },
-        { key: "outcome", header: "Outcome", render: (c) => <OutcomeBadge outcome={c.outcome} /> },
-        { key: "duration", header: "Duration", render: (c) => formatDuration(c.duration_ms) },
+        {
+          key: "outcome",
+          header: "Outcome",
+          sortValue: (c) => c.outcome,
+          render: (c) => <StatusBadge state={c.outcome} />,
+        },
+        {
+          key: "duration",
+          header: "Duration",
+          align: "right",
+          sortValue: (c) => c.duration_ms,
+          render: (c) => <span className="tabular-nums">{formatDuration(c.duration_ms)}</span>,
+        },
         {
           key: "message",
           header: "Message / summary",
-          render: (c) => (
-            <div className="max-w-xl">
-              {c.failure_message ? (
-                <p className="text-sm text-slate-800">{c.failure_message}</p>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  {Object.entries(c.summary)
-                    .filter(([, v]) => typeof v !== "object")
-                    .slice(0, 4)
-                    .map(([k, v]) => `${k}: ${String(v)}`)
-                    .join(" · ") || "—"}
-                </p>
-              )}
-            </div>
-          ),
+          render: (c) =>
+            c.failure_message ? (
+              <span className="text-sm text-text">{c.failure_message}</span>
+            ) : (
+              <span className="text-sm text-muted">
+                {Object.entries(c.summary ?? {})
+                  .filter(([, v]) => typeof v !== "object")
+                  .slice(0, 4)
+                  .map(([k, v]) => `${k}: ${String(v)}`)
+                  .join(" · ") || "—"}
+              </span>
+            ),
         },
         {
           key: "evidence",
           header: "Evidence",
-          render: (c) => (
-            <div className="flex flex-wrap gap-1">
-              {c.evidence_ids.map((id) => {
-                const item = byId.get(id);
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-0.5 text-xs text-primary hover:bg-slate-50"
-                    onClick={() => item && onOpenEvidence(item)}
-                    disabled={!item}
-                    title={item ? item.label : id}
-                  >
-                    <FileText className="h-3 w-3" aria-hidden="true" />
-                    {item ? item.kind : id.slice(0, 10)}
-                  </button>
-                );
-              })}
-            </div>
-          ),
+          render: (c) => {
+            const ids = [
+              ...(c.log_evidence_id ? [c.log_evidence_id] : []),
+              ...c.evidence_ids.filter((id) => id !== c.log_evidence_id),
+            ];
+            if (ids.length === 0) return <span className="text-xs text-muted">none</span>;
+            return (
+              <div className="flex flex-wrap gap-1">
+                {ids.map((id) => {
+                  const item = byId.get(id);
+                  return (
+                    <Button
+                      key={id}
+                      size="sm"
+                      variant="ghost"
+                      disabled={!item}
+                      onClick={() => item && onOpenEvidence(item)}
+                      aria-label={`View ${item?.kind ?? "evidence"} for ${c.name}`}
+                      title={item ? item.label || item.kind : id}
+                    >
+                      <FileSearch className="h-3.5 w-3.5" aria-hidden="true" />
+                      {item ? item.kind : id.slice(0, 10)}
+                    </Button>
+                  );
+                })}
+              </div>
+            );
+          },
         },
       ]}
     />

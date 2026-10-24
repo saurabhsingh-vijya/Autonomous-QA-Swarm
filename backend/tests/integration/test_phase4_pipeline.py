@@ -326,7 +326,7 @@ def test_full_pipeline_with_target_engines_and_regression_rerun(
     assert "items-api::create and fetch an item::fetch created item" in node_ids
     assert "security::verbose_error_body::/boom" in node_ids and "perf::/health" in node_ids
 
-    evidence = client.get(f"/api/v1/jobs/{job['id']}/evidence", headers=LEAD).json()
+    evidence = client.get(f"/api/v1/jobs/{job['id']}/evidence", headers=LEAD).json()["items"]
     kinds = {e["kind"] for e in evidence}
     assert {"api_test_report", "security_report", "performance_report", "log"} <= kinds
     if playwright_status()[0]:

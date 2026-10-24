@@ -1,17 +1,17 @@
 import type { Severity } from "../api/types";
 
 const STYLES: Record<Severity, string> = {
-  critical: "bg-red-900 text-white",
-  high: "bg-orange-600 text-white",
-  medium: "bg-amber-500 text-white",
-  low: "bg-slate-500 text-white",
-  informational: "bg-slate-200 text-slate-700",
+  critical: "bg-danger text-white",
+  high: "bg-orange text-white",
+  medium: "bg-warn text-black/80",
+  low: "bg-neutral text-white",
+  informational: "bg-neutral/20 text-muted",
 };
 
 export function SeverityChip({ severity }: { severity: Severity }) {
   return (
     <span
-      className={`inline-flex rounded px-2 py-0.5 text-xs font-semibold capitalize ${STYLES[severity]}`}
+      className={`inline-flex rounded px-1.5 py-px text-2xs font-semibold capitalize ${STYLES[severity]}`}
     >
       {severity}
     </span>

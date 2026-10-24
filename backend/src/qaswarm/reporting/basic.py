@@ -40,6 +40,7 @@ def build_report(session: Session, job: Job, *, partial: bool = False) -> Report
     report.digest = digest
     report.partial = partial
     report.verdict = None
+    report.generator = "basic-partial" if partial else "basic"
     session.flush()
     return report
 

@@ -1,116 +1,410 @@
-import { Plus } from "lucide-react";
+import { AlertCircle, ArrowRight, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useJobs, useProjects, useRepositories } from "../api/hooks";
-import type { Job } from "../api/types";
+import {
+  useCapabilities,
+  useExecutions,
+  useFindings,
+  useJobs,
+  useQualityGates,
+  useRepositories,
+} from "../api/hooks";
+import type { Job, JobState } from "../api/types";
 import { TERMINAL_JOB_STATES } from "../api/types";
+import { useProjectContext } from "../app/ProjectContext";
+import { STATE_TONES } from "../components/status";
 import {
   DataTable,
   EmptyState,
-  LoadingState,
+  ErrorState,
+  LinkButton,
   PageHeader,
-  ProblemAlert,
+  Skeleton,
+  SkeletonRows,
   StatusBadge,
+  stateLabel,
 } from "../components";
 import { ScreenFooter } from "../layout/AppShell";
-import { formatTime, profilesSummary } from "../lib/format";
+import { formatTime, profilesSummary, repoShortName } from "../lib/format";
 import { screenById } from "./registry";
 
 const screen = screenById("SCR-01");
 
-function Tile({ label, value, note }: { label: string; value: string; note?: string }) {
+const BAR_COLORS: Record<string, string> = {
+  grey: "bg-neutral",
+  slate: "bg-neutral/60",
+  blue: "bg-info",
+  indigo: "bg-accent",
+  green: "bg-ok",
+  amber: "bg-warn",
+  red: "bg-danger",
+  violet: "bg-violet",
+  orange: "bg-orange",
+};
+
+function Tile({
+  label,
+  value,
+  note,
+  loading,
+  to,
+}: {
+  label: string;
+  value: number | string;
+  note?: string;
+  loading?: boolean;
+  to?: string;
+}) {
+  const body = (
+    <>
+      <div className="text-xs text-muted">{label}</div>
+      {loading ? (
+        <Skeleton className="mt-1.5 h-7 w-12" />
+      ) : (
+        <div className="mt-1 text-xl font-semibold tabular-nums text-text">{value}</div>
+      )}
+      {note ? <div className="mt-1 text-2xs text-muted">{note}</div> : null}
+    </>
+  );
+  return to ? (
+    <Link to={to} className="card block p-3.5 rao-transition hover:border-line-strong">
+      {body}
+    </Link>
+  ) : (
+    <div className="card p-3.5">{body}</div>
+  );
+}
+
+function NotYet({ label, detail }: { label: string; detail: string }) {
   return (
-    <div className="card p-4">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
-      {note ? <div className="mt-1 text-xs text-slate-500">{note}</div> : null}
+    <div className="card p-3.5">
+      <div className="text-xs text-muted">{label}</div>
+      <div className="mt-1 text-sm font-medium text-text">No data yet</div>
+      <div className="mt-1 text-2xs text-muted">{detail}</div>
     </div>
   );
 }
 
+const FINISHED: JobState[] = ["completed", "completed_with_warnings", "failed"];
+
+/** Outcome tiles for the newest finished job; every number is read from its persisted records. */
+function LatestOutcome({ job }: { job: Job | undefined }) {
+  const gates = useQualityGates(job?.id);
+  const executions = useExecutions(job?.id);
+  const findings = useFindings(job?.id);
+  if (!job) {
+    const detail = "No job has finished yet. Create a job with requirements or API checks.";
+    return (
+      <>
+        <NotYet label="Test executions" detail={detail} />
+        <NotYet label="Findings" detail={detail} />
+        <NotYet label="Quality gates" detail={detail} />
+      </>
+    );
+  }
+  const execs = Array.isArray(executions.data?.items) ? executions.data.items : [];
+  const executed = execs.filter((e) => e.status === "passed" || e.status === "failed").length;
+  const failed = execs.filter((e) => e.status === "failed").length;
+  const findingRows = Array.isArray(findings.data?.items) ? findings.data.items : [];
+  const verdict = gates.data?.verdict ?? null;
+  const loading = executions.isLoading || findings.isLoading || gates.isLoading;
+  return (
+    <>
+      <Tile
+        label={`Test executions · ${job.display_id}`}
+        value={executed}
+        loading={loading}
+        note={
+          execs.length
+            ? `${failed} failed, ${execs.length - executed} skipped or blocked`
+            : "Nothing executed for this job"
+        }
+        to={`/results/api?job=${job.id}`}
+      />
+      <Tile
+        label={`Open findings · ${job.display_id}`}
+        value={
+          findingRows.filter((f) => f.status === "candidate" || f.status === "reopened").length
+        }
+        loading={loading}
+        note={
+          findingRows.length
+            ? `${findingRows.length} recorded, ${findingRows.filter((f) => f.confidence === "confirmed").length} confirmed`
+            : "No finding recorded"
+        }
+        to={`/defects?job=${job.id}`}
+      />
+      <Tile
+        label={`Quality gates · ${job.display_id}`}
+        value={verdict ? verdict.replace(/_/g, " ") : "No report"}
+        loading={loading}
+        note={gates.data?.verdict_reason}
+        to={`/reports?job=${job.id}`}
+      />
+    </>
+  );
+}
+
 export function DashboardScreen() {
-  const projects = useProjects();
-  const repos = useRepositories();
-  const jobs = useJobs({ limit: 20 });
+  const { projectId, project, projects, isLoading: projectsLoading } = useProjectContext();
+  const repos = useRepositories(projectId);
+  const jobs = useJobs({ limit: 200, project_id: projectId });
+  const caps = useCapabilities();
   const repoById = new Map((repos.data?.items ?? []).map((r) => [r.id, r]));
-  const active = (jobs.data?.items ?? []).filter((j) => !TERMINAL_JOB_STATES.includes(j.state));
-  const sample = projects.data?.items.some((p) => p.org_name?.includes("(sample org)"));
+  const jobItems = jobs.data?.items ?? [];
+  const active = jobItems.filter((j) => !TERMINAL_JOB_STATES.includes(j.state));
+  const held = jobItems.filter((j) => j.state === "validating" && j.held_reason);
+  const awaiting = jobItems.filter((j) => j.state === "awaiting_approval");
+  const latestFinished = jobItems.find((j) => FINISHED.includes(j.state));
+  const sample = projects.some((p) => p.org_name?.includes("(sample org)"));
+  const scope = project ? project.name : "all projects";
+
+  const byState = jobItems.reduce<Record<string, number>>((acc, j) => {
+    acc[j.state] = (acc[j.state] ?? 0) + 1;
+    return acc;
+  }, {});
+  const stateEntries = Object.entries(byState).sort((a, b) => b[1] - a[1]) as [JobState, number][];
+
+  const firstRun = !repos.isLoading && !projectsLoading && (repos.data?.items.length ?? 0) === 0;
+  const dbDown = Boolean(caps.data && caps.data.database && !caps.data.database.available);
 
   return (
     <div>
       <PageHeader
         crumbs={[{ label: "Home" }, { label: "Dashboard" }]}
         title="QA Health Overview"
-        subtitle="Release readiness, open findings and pipeline health for the latest jobs · the platform recommends, the QA Lead decides (HA-10)."
+        subtitle={`Counts for ${scope}. Everything here is read from the local database; the platform recommends and a QA Lead decides (HA-10).`}
         actions={
-          <Link to="/jobs/new" className="btn-primary">
+          <LinkButton to="/jobs/new" variant="primary">
             <Plus className="h-4 w-4" aria-hidden="true" /> New QA job
-          </Link>
+          </LinkButton>
         }
       />
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-4">
+
+      {firstRun ? (
+        <section className="card mb-5 p-5" aria-labelledby="first-run">
+          <h2 id="first-run" className="text-md font-semibold text-text">
+            Get started in three steps
+          </h2>
+          <p className="mt-1 text-sm text-muted">
+            RaOne runs entirely on this machine. No repository code is fetched or executed; agents
+            work from the requirements and read-only API checks you supply with a job.
+          </p>
+          <ol className="mt-4 grid gap-3 md:grid-cols-3">
+            {[
+              {
+                n: 1,
+                title: "Create a project",
+                text: "Projects group repositories and, later, gate thresholds.",
+                to: "/repositories?new=project",
+                cta: "Create project",
+                done: projects.length > 0,
+              },
+              {
+                n: 2,
+                title: "Add a repository",
+                text: "An HTTPS URL on an allow-listed host. Checked syntactically only.",
+                to: "/repositories?new=repository",
+                cta: "Add repository",
+                done: false,
+              },
+              {
+                n: 3,
+                title: "Create a QA job",
+                text: "Supply requirements or API checks; a deterministic plan runs five agent roles locally.",
+                to: "/jobs/new",
+                cta: "New QA job",
+                done: false,
+              },
+            ].map((s) => (
+              <li key={s.n} className="rounded-md border border-line bg-canvas p-3.5">
+                <div className="flex items-center gap-2 text-sm font-medium text-text">
+                  <span
+                    className={`flex h-5 w-5 items-center justify-center rounded-full text-2xs ${
+                      s.done ? "bg-ok text-white" : "border border-line-strong text-muted"
+                    }`}
+                  >
+                    {s.n}
+                  </span>
+                  {s.title}
+                </div>
+                <p className="mt-1.5 text-xs text-muted">{s.text}</p>
+                <div className="mt-3">
+                  <LinkButton to={s.to} size="sm" variant={s.done ? "secondary" : "primary"}>
+                    {s.done ? "Done, add another" : s.cta}
+                    <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </LinkButton>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Tile
           label="Projects"
-          value={projects.isLoading ? "…" : String(projects.data?.items.length ?? 0)}
+          value={projects.length}
+          loading={projectsLoading}
+          to="/repositories"
         />
         <Tile
           label="Repositories"
-          value={repos.isLoading ? "…" : String(repos.data?.items.length ?? 0)}
-          note="validated when a job pins them"
+          value={repos.data?.items.length ?? 0}
+          loading={repos.isLoading}
+          note="Syntactic validation only in this slice"
+          to="/repositories"
         />
+        <Tile label="Jobs" value={jobItems.length} loading={jobs.isLoading} to="/jobs" />
         <Tile
           label="Active jobs"
-          value={jobs.isLoading ? "…" : String(active.length)}
-          note="non-terminal states"
-        />
-        <Tile
-          label="Agent pool / Quality gates"
-          value="—"
-          note="Not implemented in this phase (slice 1c / 2d)"
+          value={active.length}
+          loading={jobs.isLoading}
+          note="Non-terminal states"
+          to="/jobs"
         />
       </div>
 
-      <section className="card">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-900">
-            Recent jobs{" "}
-            <span className="font-normal text-slate-500">
-              {jobs.data ? `${jobs.data.items.length} shown · newest first` : ""}
-            </span>
+      <div className="mb-5 grid gap-3 lg:grid-cols-3">
+        <section className="card p-3.5 lg:col-span-2" aria-labelledby="states-heading">
+          <h2 id="states-heading" className="text-xs text-muted">
+            Jobs by state
           </h2>
-          <Link to="/jobs" className="text-sm text-primary hover:underline">
-            View all
+          {jobs.isLoading ? (
+            <Skeleton className="mt-2 h-2.5" />
+          ) : jobItems.length === 0 ? (
+            <p className="mt-1.5 text-sm text-muted">No jobs yet for {scope}.</p>
+          ) : (
+            <>
+              <div
+                className="mt-2 flex h-2.5 w-full overflow-hidden rounded bg-raised"
+                role="img"
+                aria-label={stateEntries.map(([s, n]) => `${stateLabel(s)} ${n}`).join(", ")}
+              >
+                {stateEntries.map(([s, n]) => (
+                  <span
+                    key={s}
+                    className={BAR_COLORS[STATE_TONES[s] ?? "grey"]}
+                    style={{ width: `${(n / jobItems.length) * 100}%` }}
+                  />
+                ))}
+              </div>
+              <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                {stateEntries.map(([s, n]) => (
+                  <li key={s} className="flex items-center gap-1.5">
+                    <span
+                      className={`h-2 w-2 rounded-sm ${BAR_COLORS[STATE_TONES[s] ?? "grey"]}`}
+                      aria-hidden="true"
+                    />
+                    <Link to={`/jobs?state=${s}`} className="text-muted hover:text-text">
+                      {stateLabel(s)}
+                    </Link>
+                    <span className="tabular-nums text-text">{n}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+        <section className="card p-3.5" aria-labelledby="attention-heading">
+          <h2 id="attention-heading" className="text-xs text-muted">
+            Needs attention
+          </h2>
+          <ul className="mt-2 space-y-1.5 text-sm">
+            {dbDown || caps.isError ? (
+              <li className="flex items-start gap-2 text-danger">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>
+                  {caps.isError ? "The API is unreachable." : "The database is unreachable."}{" "}
+                  <Link to="/settings" className="link">
+                    System health
+                  </Link>
+                </span>
+              </li>
+            ) : null}
+            {awaiting.slice(0, 5).map((j) => (
+              <li key={j.id} className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden="true" />
+                <span className="min-w-0">
+                  <Link to={`/jobs/${j.id}`} className="mono link">
+                    {j.display_id}
+                  </Link>{" "}
+                  <span className="text-muted">awaiting plan approval (HA-05)</span>
+                </span>
+              </li>
+            ))}
+            {held.slice(0, 5).map((j) => (
+              <li key={j.id} className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden="true" />
+                <span className="min-w-0">
+                  <Link to={`/jobs/${j.id}`} className="mono link">
+                    {j.display_id}
+                  </Link>{" "}
+                  <span className="text-muted">held: {j.held_reason}</span>
+                </span>
+              </li>
+            ))}
+            {held.length > 5 ? (
+              <li className="text-xs text-muted">
+                <Link to="/jobs?state=validating" className="link">
+                  {held.length - 5} more held jobs
+                </Link>
+              </li>
+            ) : null}
+            {!dbDown && !caps.isError && held.length === 0 && awaiting.length === 0 ? (
+              <li className="text-muted">Nothing needs attention.</li>
+            ) : null}
+          </ul>
+        </section>
+      </div>
+
+      <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+        <LatestOutcome job={latestFinished} />
+      </div>
+
+      <section className="card" aria-labelledby="recent-heading">
+        <div className="flex items-center justify-between border-b border-line px-3.5 py-2.5">
+          <h2 id="recent-heading" className="text-sm font-semibold text-text">
+            Recent jobs
+            {jobs.data ? (
+              <span className="ml-2 text-xs font-normal text-muted">
+                {Math.min(jobItems.length, 10)} of {jobItems.length}, newest first
+              </span>
+            ) : null}
+          </h2>
+          <Link to="/jobs" className="link text-xs">
+            View all jobs
           </Link>
         </div>
-        {jobs.isLoading ? <LoadingState label="Loading jobs" /> : null}
-        {jobs.isError ? (
-          <div className="p-4">
-            <ProblemAlert error={jobs.error} />
-          </div>
-        ) : null}
-        {jobs.data && jobs.data.items.length === 0 ? (
+        {jobs.isLoading ? <SkeletonRows label="Loading jobs" /> : null}
+        {jobs.isError ? <ErrorState error={jobs.error} onRetry={() => jobs.refetch()} /> : null}
+        {jobs.data && jobItems.length === 0 ? (
           <div className="p-4">
             <EmptyState
               title="No jobs yet"
-              description="Add a repository, then create a QA job. The scheduler pins the commit and the Execution Service runs the checks."
+              description="Register a repository, then create a QA job with requirements or API checks. Agents run locally against what you supply; no repository code is executed."
               action={
-                <Link to="/repositories" className="btn-primary">
-                  Add a repository
-                </Link>
+                <>
+                  <LinkButton to="/repositories" variant="primary">
+                    Add a repository
+                  </LinkButton>
+                  <LinkButton to="/jobs/new">New QA job</LinkButton>
+                </>
               }
             />
           </div>
         ) : null}
-        {jobs.data && jobs.data.items.length > 0 ? (
+        {jobs.data && jobItems.length > 0 ? (
           <DataTable<Job>
             caption="Recent jobs"
-            rows={jobs.data.items}
+            rows={jobItems.slice(0, 10)}
             rowKey={(j) => j.id}
             columns={[
               {
                 key: "job",
                 header: "Job",
+                sortValue: (j) => j.display_id,
                 render: (j) => (
-                  <Link to={`/jobs/${j.id}`} className="font-mono text-sm font-medium text-primary">
+                  <Link to={`/jobs/${j.id}`} className="mono font-medium text-accent">
                     {j.display_id}
                   </Link>
                 ),
@@ -118,28 +412,40 @@ export function DashboardScreen() {
               {
                 key: "repo",
                 header: "Repository",
-                render: (j) =>
-                  repoById.get(j.repository_id)?.url.replace(/^https:\/\//, "") ?? j.repository_id,
+                render: (j) => {
+                  const r = repoById.get(j.repository_id);
+                  return <span className="mono">{r ? repoShortName(r.url) : j.repository_id}</span>;
+                },
               },
               {
                 key: "ref",
-                header: "Ref → commit",
-                render: (j) => `${j.ref} → ${j.commit_sha ?? "not pinned"}`,
+                header: "Ref",
+                render: (j) => (
+                  <span className="mono">
+                    {j.ref}
+                    {j.commit_sha ? ` ${j.commit_sha.slice(0, 10)}` : ""}
+                  </span>
+                ),
               },
               { key: "profiles", header: "Profiles", render: (j) => profilesSummary(j.profiles) },
-              { key: "state", header: "State", render: (j) => <StatusBadge state={j.state} /> },
-              { key: "reason", header: "Reason", render: (j) => j.held_reason ?? "—" },
+              {
+                key: "state",
+                header: "State",
+                sortValue: (j) => j.state,
+                render: (j) => <StatusBadge state={j.state} />,
+              },
               {
                 key: "created",
-                header: "Created (local)",
-                render: (j) => formatTime(j.created_at),
+                header: "Created",
+                sortValue: (j) => j.created_at,
+                render: (j) => <span className="tabular-nums">{formatTime(j.created_at)}</span>,
               },
             ]}
           />
         ) : null}
       </section>
       {sample ? (
-        <p className="mt-3 text-xs text-amber-800">Sample data — no repository code executed</p>
+        <p className="mt-3 text-xs text-warn">Sample data — no repository code executed</p>
       ) : null}
       <ScreenFooter id={screen.id} name={screen.name} />
     </div>

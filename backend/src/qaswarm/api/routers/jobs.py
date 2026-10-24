@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from json import loads as json_loads
-
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -14,23 +12,18 @@ from qaswarm.api.pagination import clamp_limit, decode_cursor
 from qaswarm.api.schemas import (
     CheckRunOut,
     CompareOut,
-    EvidenceItemOut,
     JobCancelOut,
     JobCancelRequest,
     JobCreate,
     JobDetailOut,
     JobOut,
     Paginated,
-    ReportOut,
     RerunRequest,
-    TaskOut,
-    TestExecutionOut,
     WorkerRunOut,
 )
 from qaswarm.api.services import jobs as svc
 from qaswarm.api.services import results as results_svc
 from qaswarm.config import Settings, get_settings
-from qaswarm.reporting import render_html
 from qaswarm.telemetry.logging import correlation_id_var
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -190,15 +183,6 @@ def rerun_job(
     )
 
 
-@router.get("/{job_id}/tasks", response_model=list[TaskOut])
-def list_tasks(
-    job_id: str,
-    session: Session = Depends(get_db, scope="function"),
-    principal: Principal = Depends(get_principal),
-) -> list[TaskOut]:
-    return results_svc.list_tasks(session, principal, job_id)
-
-
 @router.get("/{job_id}/checks", response_model=list[CheckRunOut])
 def list_checks(
     job_id: str,
@@ -208,31 +192,6 @@ def list_checks(
     return results_svc.list_checks(session, principal, job_id)
 
 
-@router.get("/{job_id}/test-executions", response_model=Paginated[TestExecutionOut])
-def list_test_executions(
-    job_id: str,
-    response: Response,
-    status: str | None = Query(default=None, description="Comma-separated test statuses"),
-    limit: int | None = Query(default=None, ge=1, le=200),
-    session: Session = Depends(get_db, scope="function"),
-    principal: Principal = Depends(get_principal),
-) -> Paginated[TestExecutionOut]:
-    lim = clamp_limit(limit)
-    statuses = [s.strip() for s in status.split(",") if s.strip()] if status else None
-    items, counts = results_svc.list_tests(session, principal, job_id, status=statuses, limit=lim)
-    response.headers["X-Test-Counts"] = ",".join(f"{k}={v}" for k, v in sorted(counts.items()))
-    return Paginated(items=items, next_cursor=None, limit=lim)
-
-
-@router.get("/{job_id}/evidence", response_model=list[EvidenceItemOut])
-def list_evidence(
-    job_id: str,
-    session: Session = Depends(get_db, scope="function"),
-    principal: Principal = Depends(get_principal),
-) -> list[EvidenceItemOut]:
-    return results_svc.list_evidence(session, principal, job_id)
-
-
 @router.get("/{job_id}/worker-runs", response_model=list[WorkerRunOut])
 def list_worker_runs(
     job_id: str,
@@ -240,40 +199,6 @@ def list_worker_runs(
     principal: Principal = Depends(get_principal),
 ) -> list[WorkerRunOut]:
     return results_svc.list_worker_runs(session, principal, job_id)
-
-
-@router.get(
-    "/{job_id}/report",
-    response_model=ReportOut,
-    responses={200: {"content": {"text/html": {}}}, 501: {"description": "format not built yet"}},
-)
-def get_report(
-    job_id: str,
-    format: str = Query(default="json", pattern="^(json|html|pdf|sarif|junit)$"),
-    session: Session = Depends(get_db, scope="function"),
-    principal: Principal = Depends(get_principal),
-) -> Response:
-    report = results_svc.get_report(session, principal, job_id)
-    if format == "json":
-        return JSONResponse(content=json_loads(report.model_dump_json()))
-    if format == "html":
-        return Response(
-            content=render_html(report.content),
-            media_type="text/html; charset=utf-8",
-            # The report is self-contained: inline styles only, no scripts, no remote assets.
-            headers={
-                "Content-Security-Policy": (
-                    "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
-                ),
-                "Cache-Control": "private, no-store",
-            },
-        )
-    raise Problem(
-        501,
-        "not_implemented",
-        f"Report format '{format}' is planned for slice 2d and is not implemented in this build.",
-        planned_slice="2d",
-    )
 
 
 @router.get("/{job_id}/compare", response_model=CompareOut)

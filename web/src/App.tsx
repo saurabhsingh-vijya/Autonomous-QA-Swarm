@@ -1,38 +1,84 @@
 import { Route, Routes } from "react-router-dom";
+import { ProjectProvider } from "./app/ProjectContext";
+import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
+import { AgentGraphScreen } from "./screens/AgentGraph";
 import { CompareRunsScreen } from "./screens/CompareRuns";
 import { DashboardScreen } from "./screens/Dashboard";
-import { FunctionalResultsScreen } from "./screens/FunctionalResults";
+import { DefectsScreen } from "./screens/Defects";
+import { ExecutionResultsScreen } from "./screens/ExecutionResults";
 import { JobDetailScreen } from "./screens/JobDetail";
 import { JobsScreen } from "./screens/Jobs";
 import { NewJobScreen } from "./screens/NewJob";
-import { PlaceholderScreen } from "./screens/Placeholder";
+import { NotAvailableScreen } from "./screens/NotAvailable";
+import { ReportsScreen } from "./screens/Reports";
 import { RepositoriesScreen } from "./screens/Repositories";
-import { SCREENS } from "./screens/registry";
+import { SettingsScreen } from "./screens/Settings";
+import { SCREENS, screenById } from "./screens/registry";
+import { ThemeProvider } from "./theme/ThemeProvider";
+import { LinkButton } from "./components/ui/Button";
+
+const CUSTOM = new Set([
+  "SCR-01",
+  "SCR-02",
+  "SCR-03",
+  "SCR-04",
+  "SCR-05",
+  "SCR-06",
+  "SCR-07",
+  "SCR-11",
+  "SCR-14",
+  "SCR-15",
+]);
 
 export function App() {
   return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<DashboardScreen />} />
-        <Route path="/repositories" element={<RepositoriesScreen />} />
-        <Route path="/jobs" element={<JobsScreen />} />
-        <Route path="/jobs/new" element={<NewJobScreen />} />
-        <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
-        <Route path="/jobs/:jobId/compare/:otherId" element={<CompareRunsScreen />} />
-        <Route path="/results/functional" element={<FunctionalResultsScreen />} />
-        {SCREENS.filter((s) => s.plannedSlice).map((s) => (
-          <Route key={s.id} path={s.path} element={<PlaceholderScreen screen={s} />} />
-        ))}
-        <Route
-          path="*"
-          element={
-            <div className="p-6 text-sm text-slate-600">
-              <h1 className="text-xl font-semibold text-slate-900">Page not found</h1>
-            </div>
-          }
-        />
-      </Route>
-    </Routes>
+    <ThemeProvider>
+      <ToastProvider>
+        <ProjectProvider>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route index element={<DashboardScreen />} />
+              <Route path="/repositories" element={<RepositoriesScreen />} />
+              <Route path="/jobs" element={<JobsScreen />} />
+              <Route path="/jobs/new" element={<NewJobScreen />} />
+              <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+              <Route path="/jobs/:jobId/compare/:otherId" element={<CompareRunsScreen />} />
+              <Route path="/agent-graph" element={<AgentGraphScreen />} />
+              <Route
+                path="/results/functional"
+                element={
+                  <ExecutionResultsScreen screen={screenById("SCR-06")} testType="functional" />
+                }
+              />
+              <Route
+                path="/results/api"
+                element={<ExecutionResultsScreen screen={screenById("SCR-07")} testType="api" />}
+              />
+              <Route path="/defects" element={<DefectsScreen />} />
+              <Route path="/reports" element={<ReportsScreen />} />
+              <Route path="/settings" element={<SettingsScreen />} />
+              {SCREENS.filter((s) => !CUSTOM.has(s.id)).map((s) => (
+                <Route key={s.id} path={s.path} element={<NotAvailableScreen screen={s} />} />
+              ))}
+              <Route
+                path="*"
+                element={
+                  <div className="py-10 text-sm text-muted">
+                    <h1 className="text-xl font-semibold text-text">Page not found</h1>
+                    <p className="mt-1">There is no screen at this address.</p>
+                    <div className="mt-4">
+                      <LinkButton to="/" variant="primary">
+                        Go to Dashboard
+                      </LinkButton>
+                    </div>
+                  </div>
+                }
+              />
+            </Route>
+          </Routes>
+        </ProjectProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

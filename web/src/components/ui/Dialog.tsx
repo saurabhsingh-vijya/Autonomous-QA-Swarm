@@ -11,6 +11,7 @@ export function Dialog({
   description,
   children,
   footer,
+  size = "md",
 }: {
   open: boolean;
   onClose: () => void;
@@ -18,6 +19,7 @@ export function Dialog({
   description?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  size?: "md" | "lg";
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -32,6 +34,7 @@ export function Dialog({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         onClose();
       }
       if (e.key === "Tab" && panel) {
@@ -57,7 +60,7 @@ export function Dialog({
 
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4">
       <button
         type="button"
         aria-label="Close dialog"
@@ -71,15 +74,18 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descId : undefined}
-        className="relative w-full max-w-lg rounded-xl border border-slate-200 bg-white shadow-xl"
+        data-motion="rise"
+        className={`relative w-full rounded-lg border border-line bg-raised shadow-dialog ${
+          size === "lg" ? "max-w-2xl" : "max-w-lg"
+        }`}
       >
-        <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
-          <div>
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-3.5">
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-md font-semibold text-text">
               {title}
             </h2>
             {description ? (
-              <p id={descId} className="mt-0.5 text-sm text-slate-500">
+              <p id={descId} className="mt-0.5 text-xs text-muted">
                 {description}
               </p>
             ) : null}
@@ -87,7 +93,7 @@ export function Dialog({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
+            className="rounded-md p-1 text-muted rao-transition hover:bg-surface hover:text-text"
             aria-label="Close"
           >
             <X className="h-4 w-4" aria-hidden="true" />
@@ -95,7 +101,7 @@ export function Dialog({
         </div>
         <div className="px-5 py-4">{children}</div>
         {footer ? (
-          <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3">{footer}</div>
+          <div className="flex justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>
         ) : null}
       </div>
     </div>

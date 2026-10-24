@@ -10,7 +10,6 @@ const TITLE_BY_ID: Record<string, string> = {
   "SCR-02": "Repositories & Projects",
   "SCR-03": "New QA job",
   "SCR-04": "Live Job Execution",
-  "SCR-06": "Functional Test Results",
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -27,7 +26,7 @@ describe("routing", () => {
           screen.getByRole("heading", { level: 1, name: new RegExp(title) }),
         ).toBeInTheDocument(),
       );
-      expect(screen.getByText("Concept build — no repository code executed")).toBeInTheDocument();
+      expect(screen.getByTestId("mode-pill")).toBeInTheDocument();
       expect(screen.getByText(s.id)).toBeInTheDocument();
       unmount();
     }

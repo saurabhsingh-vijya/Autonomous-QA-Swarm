@@ -21,7 +21,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("AddRepositoryDialog", () => {
   it("renders 422 problem+json errors inline, including the /url pointer", async () => {
     const problem = {
-      type: "https://qa-swarm.dev/problems/repository-url-rejected",
+      type: "https://raone.dev/problems/repository-url-rejected",
       title: "Repository URL rejected",
       status: 422,
       detail: "Only HTTPS URLs on allow-listed hosts are accepted.",

@@ -27,6 +27,8 @@ services:
       AQS_DEV_FIXTURE_REPOS: "true"
       AQS_FIXTURES_DIR: /fixtures
       AQS_EVIDENCE_DIR: /data/evidence
+      # Agent runner (AG-02/03/04/08/11) inside the API process (phase 3).
+      AQS_RUNNER_ENABLED: "true"
     volumes:
       - evidence:/data/evidence
       - ./exec/fixtures:/fixtures:ro

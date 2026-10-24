@@ -1,7 +1,7 @@
 [project]
 name = "qaswarm-exec"
 version = "0.1.0"
-description = "Autonomous QA Swarm Execution Service host agent (phase 2: process runtime, check engines)"
+description = "RaOne Execution Service host agent (phase 2: process runtime, check engines)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "httpx>=0.27,<0.29",

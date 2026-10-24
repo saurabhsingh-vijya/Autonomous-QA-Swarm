@@ -1,69 +1,94 @@
-import { X } from "lucide-react";
-import { useEvidenceContent } from "../api/hooks.phase2";
-import type { EvidenceItem } from "../api/types.phase2";
-import { LoadingState } from "./LoadingState";
-import { ProblemAlert } from "./ProblemAlert";
+import { useEvidenceContent } from "../api/hooks";
+import type { EvidenceItem } from "../api/types";
+import { formatTime } from "../lib/format";
+import { Badge, Button, Dialog, KeyValue } from "./ui";
 
+/**
+ * Shows one persisted evidence item verbatim: its hashes, redaction status and content. Agent
+ * evidence carries its JSON inline; Execution Service objects (logs, manifests, JUnit) are read
+ * from the evidence store through `/evidence/{id}/content`.
+ */
 export function EvidenceDrawer({
-  item,
+  evidence,
   onClose,
 }: {
-  item: EvidenceItem | null;
+  evidence: EvidenceItem | null;
   onClose: () => void;
 }) {
-  const content = useEvidenceContent(item?.id ?? null);
-  if (!item) return null;
+  const needsFetch = Boolean(evidence) && evidence?.content == null;
+  const stored = useEvidenceContent(needsFetch ? evidence?.id : null);
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="evidence-title"
-      className="fixed inset-y-0 right-0 z-40 flex w-full max-w-2xl flex-col border-l border-slate-200 bg-white shadow-xl"
+    <Dialog
+      open={Boolean(evidence)}
+      onClose={onClose}
+      title={evidence ? `Evidence ${evidence.id}` : "Evidence"}
+      size="lg"
+      description="Content-addressed record written by the tool or agent that produced it. Secrets are redacted before storage."
+      footer={<Button onClick={onClose}>Close</Button>}
     >
-      <div className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
-        <div className="min-w-0">
-          <h2 id="evidence-title" className="text-sm font-semibold text-slate-900">
-            {item.label || item.kind}
-          </h2>
-          <p className="mt-0.5 truncate font-mono text-xs text-slate-500">
-            {item.id} · {item.media_type} · {item.size_bytes} B · sha256 {item.sha256.slice(0, 16)}…
-          </p>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {item.redactions > 0
-              ? `${item.redactions} redaction(s) applied · `
-              : "redaction: no matches · "}
-            {item.truncated ? "truncated at the output cap · " : ""}
-            {item.deterministic ? "deterministic tool output" : "agent output"}
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={onClose}
-          aria-label="Close evidence"
-        >
-          <X className="h-4 w-4" aria-hidden="true" />
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        {content.isLoading ? <LoadingState label="Loading evidence" /> : null}
-        {content.isError ? <ProblemAlert error={content.error} /> : null}
-        {content.data ? (
-          content.data.text != null ? (
-            <pre className="whitespace-pre-wrap break-all rounded-lg bg-slate-900 p-3 font-mono text-xs leading-5 text-slate-100">
-              {content.data.text || "(empty)"}
-              {content.data.truncated_inline
-                ? "\n… (inline preview truncated; download for the full object)"
-                : ""}
+      {evidence ? (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            <Badge tone="accent">{evidence.kind}</Badge>
+            {evidence.label && evidence.label !== evidence.kind ? (
+              <Badge tone="neutral">{evidence.label}</Badge>
+            ) : null}
+            <Badge tone={evidence.redaction_status === "redacted" ? "ok" : "neutral"}>
+              redaction {evidence.redaction_status}
+              {evidence.redactions ? ` (${evidence.redactions})` : ""}
+            </Badge>
+            <Badge tone={evidence.deterministic ? "info" : "neutral"}>
+              {evidence.deterministic ? "deterministic" : "non-deterministic"}
+            </Badge>
+            {evidence.truncated ? <Badge tone="warn">truncated</Badge> : null}
+          </div>
+          <KeyValue
+            columns={2}
+            items={[
+              { label: "Producer", value: evidence.producer },
+              { label: "Media type", value: evidence.media_type, mono: true },
+              { label: "SHA-256", value: evidence.sha256, mono: true },
+              { label: "Size", value: `${evidence.size_bytes} bytes` },
+              { label: "Task", value: evidence.task_id ?? "—", mono: true },
+              { label: "Recorded", value: formatTime(evidence.created_at) },
+            ]}
+          />
+          {evidence.content != null ? (
+            <pre
+              className="max-h-80 overflow-auto rounded-md border border-line bg-canvas p-3 font-mono text-xs text-text"
+              aria-label="Evidence content"
+            >
+              {JSON.stringify(evidence.content, null, 2)}
             </pre>
+          ) : stored.isLoading ? (
+            <p className="text-sm text-muted">Loading stored object…</p>
+          ) : stored.isError ? (
+            <p className="text-sm text-danger">
+              The stored object could not be read (
+              {stored.error instanceof Error ? stored.error.message : "unknown error"}).
+            </p>
+          ) : stored.data?.text != null ? (
+            <>
+              <pre
+                className="max-h-80 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-canvas p-3 font-mono text-xs text-text"
+                aria-label="Evidence content"
+              >
+                {stored.data.text}
+              </pre>
+              {stored.data.truncated_inline ? (
+                <p className="text-xs text-muted">
+                  Inline preview truncated; the full object is available through the download
+                  endpoint.
+                </p>
+              ) : null}
+            </>
           ) : (
-            <p className="text-sm text-slate-600">Binary evidence; use the download link.</p>
-          )
-        ) : null}
-      </div>
-      <div className="border-t border-slate-200 px-5 py-3 text-xs text-slate-500">
-        Evidence is content-addressed and immutable; secrets are redacted before storage (SEC-008).
-      </div>
-    </div>
+            <p className="text-sm text-muted">
+              Binary object ({stored.data?.media_type ?? evidence.media_type}); no inline preview.
+            </p>
+          )}
+        </div>
+      ) : null}
+    </Dialog>
   );
 }

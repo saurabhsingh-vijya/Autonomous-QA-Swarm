@@ -1,9 +1,30 @@
-"""qaswarm.planning: deterministic template plan (phase 2).
+"""qaswarm.planning: deterministic planners.
 
-The LLM-assisted planner (AG-01, slice 2c) is not part of this build. The template plan is the
-deterministic fallback the design prescribes when no planner output is available.
+- ``template``: the Execution Service plan (``env_prepare`` + one ``check`` task per engine) for
+  a pinned repository (phase 2).
+- ``planner``: the agent plan DAG (requirements → functional/API → evidence → report) with
+  validation and a stable hash (phase 3).
+- ``combined``: joins both into one job plan: repository checks run in the Execution Service,
+  agents consume supplied inputs and the persisted check results.
 """
 
-from qaswarm.planning.template import CRITICAL_TASK_TYPES, PlannedTask, build_template_plan
+from qaswarm.planning.combined import build_job_plan
+from qaswarm.planning.planner import PlanNode, build_plan, plan_hash, validate_plan
+from qaswarm.planning.template import (
+    CRITICAL_TASK_TYPES,
+    PlannedTask,
+    TemplatePlan,
+    build_template_plan,
+)
 
-__all__ = ["CRITICAL_TASK_TYPES", "PlannedTask", "build_template_plan"]
+__all__ = [
+    "CRITICAL_TASK_TYPES",
+    "PlanNode",
+    "PlannedTask",
+    "TemplatePlan",
+    "build_job_plan",
+    "build_plan",
+    "build_template_plan",
+    "plan_hash",
+    "validate_plan",
+]

@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings, get_settings
 from qaswarm.db.models import OutboxEvent, Task, TaskAttempt, WorkerRun
-from qaswarm.domain.enums import ErrorClass, RetryClass, TaskAttemptOutcome, TaskState
+from qaswarm.domain.enums import (
+    TERMINAL_TASK_STATES,
+    ErrorClass,
+    RetryClass,
+    TaskAttemptOutcome,
+    TaskState,
+)
 from qaswarm.domain.ids import new_id
 from qaswarm.domain.state_machines import TaskEvent, TaskStateMachine
 
@@ -49,6 +55,7 @@ class TaskSpec:
     inputs: dict[str, Any] = field(default_factory=dict)
     agent_id: str | None = None
     depends_on: list[str] = field(default_factory=list)
+    soft_depends_on: list[str] = field(default_factory=list)
     priority: int = 0
 
     def idempotency_key(self) -> str:
@@ -139,7 +146,7 @@ class TaskQueue:
                 agent_id=spec.agent_id,
                 state=TaskState.PENDING.value,
                 idempotency_key=key,
-                depends_on={"tasks": spec.depends_on},
+                depends_on={"tasks": spec.depends_on, "soft": spec.soft_depends_on},
                 inputs=spec.inputs,
                 priority=spec.priority,
                 available_at=_now(),
@@ -174,23 +181,38 @@ class TaskQueue:
         self, session: Session, worker_id: str, task_types: list[str], batch_size: int = 1
     ) -> list[Lease]:
         now = _now()
+        eligible = (
+            Task.state.in_([TaskState.PENDING.value, TaskState.RETRY_SCHEDULED.value]),
+            Task.task_type.in_(task_types),
+            Task.available_at <= now,
+        )
+        # Phase 1 (no locks): find runnable candidates, skipping tasks whose dependencies are not
+        # satisfied, so blocked tasks never hide runnable ones and no rows are locked needlessly.
+        scan = (
+            select(Task)
+            .where(*eligible)
+            .order_by(Task.priority.desc(), Task.available_at, Task.id)
+            .limit(max(batch_size * 8, 64))
+        )
+        runnable = [
+            t.id
+            for t in session.execute(scan).scalars()
+            if self._dependencies_satisfied(session, t)
+        ][: max(batch_size * 8, 32)]
+        if not runnable:
+            return []
+        # Phase 2: lock only runnable rows; concurrent leasers skip rows already locked.
         candidates = (
             select(Task)
-            .where(
-                Task.state.in_([TaskState.PENDING.value, TaskState.RETRY_SCHEDULED.value]),
-                Task.task_type.in_(task_types),
-                Task.available_at <= now,
-            )
+            .where(Task.id.in_(runnable), *eligible)
             .order_by(Task.priority.desc(), Task.available_at, Task.id)
-            .limit(batch_size * 4)
+            .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
         leases: list[Lease] = []
         for task in session.execute(candidates).scalars():
             if len(leases) >= batch_size:
                 break
-            if not self._dependencies_satisfied(session, task):
-                continue
             attempt_no = task.attempt_count + 1
             expires = now + timedelta(seconds=self.settings.lease_ttl_seconds)
             attempt = TaskAttempt(
@@ -216,11 +238,17 @@ class TaskQueue:
         return leases
 
     def _dependencies_satisfied(self, session: Session, task: Task) -> bool:
-        deps: list[str] = list(task.depends_on.get("tasks", []))
-        if not deps:
+        """Hard dependencies must be ``succeeded``; soft dependencies must be terminal."""
+        hard: list[str] = list(task.depends_on.get("tasks", []))
+        soft: list[str] = list(task.depends_on.get("soft", []))
+        if not hard and not soft:
             return True
-        states = session.execute(select(Task.state).where(Task.id.in_(deps))).scalars().all()
-        return len(states) == len(deps) and all(s == TaskState.SUCCEEDED.value for s in states)
+        rows = session.execute(select(Task.id, Task.state).where(Task.id.in_(hard + soft))).all()
+        states = {tid: st for tid, st in rows}
+        if any(states.get(t) != TaskState.SUCCEEDED.value for t in hard):
+            return False
+        terminal = {s.value for s in TERMINAL_TASK_STATES}
+        return all(states.get(t) in terminal for t in soft)
 
     # -- heartbeat -----------------------------------------------------------------------
     def heartbeat(self, session: Session, task_id: str, worker_id: str) -> datetime:

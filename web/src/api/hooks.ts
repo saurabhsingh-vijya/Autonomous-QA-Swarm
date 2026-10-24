@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, eventsUrl } from "./client";
+import { ApiError, api, eventsUrl, probe } from "./client";
 import type {
+  Finding,
+  FindingFilters,
   JobCreate,
   JobEvent,
   JobListParams,
   ProjectCreate,
   ProjectUpdate,
   RepositoryCreate,
+  TriageRequest,
 } from "./types";
 
 export const keys = {
@@ -16,7 +19,27 @@ export const keys = {
   repositories: (projectId?: string) => ["repositories", projectId ?? "all"] as const,
   jobs: (params: JobListParams = {}) => ["jobs", params] as const,
   job: (id: string) => ["jobs", "detail", id] as const,
+  capabilities: ["system", "capabilities"] as const,
+  agents: ["system", "agents"] as const,
+  probe: (path: string) => ["probe", path] as const,
+  results: (jobId: string, kind: string) => ["jobs", "results", jobId, kind] as const,
+  finding: (id: string) => ["findings", id] as const,
 };
+
+const notFound = (err: unknown) =>
+  err instanceof ApiError && (err.problem.status === 404 || err.problem.status === 501);
+
+export const useCapabilities = () =>
+  useQuery({ queryKey: keys.capabilities, queryFn: api.getCapabilities, staleTime: 30_000 });
+
+/** Probe an endpoint that is not implemented yet; resolves to its problem+json (or null). */
+export const useProbe = (path: string | null) =>
+  useQuery({
+    queryKey: keys.probe(path ?? ""),
+    queryFn: () => probe(path ?? ""),
+    enabled: Boolean(path),
+    staleTime: 60_000,
+  });
 
 export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: api.listProjects });
 
@@ -89,6 +112,134 @@ export function useCancelJob(id: string) {
   });
 }
 
+export const useAgents = () =>
+  useQuery({ queryKey: keys.agents, queryFn: api.listAgents, staleTime: 60_000 });
+
+/** Plan for a job; a 404 (no plan yet) resolves to null instead of an error. */
+export const usePlan = (jobId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "plan"),
+    queryFn: () => api.getPlan(jobId!).catch((e) => (notFound(e) ? null : Promise.reject(e))),
+    enabled: Boolean(jobId) && enabled,
+  });
+
+export const useTasks = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "tasks"),
+    queryFn: () => api.listTasks(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useExecutions = (jobId: string | undefined, status?: string[]) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", `executions:${status?.join(",") ?? "all"}`),
+    queryFn: () => api.listExecutions(jobId!, status),
+    enabled: Boolean(jobId),
+  });
+
+export const useChecks = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "checks"),
+    queryFn: () => api.listChecks(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useWorkerRuns = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "worker-runs"),
+    queryFn: () => api.listWorkerRuns(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+/** Inline text of a stored evidence object (`/evidence/{id}/content`). */
+export const useEvidenceContent = (id: string | null | undefined) =>
+  useQuery({
+    queryKey: ["evidence", id ?? "", "content"],
+    queryFn: () => api.getEvidenceContent(id!),
+    enabled: Boolean(id),
+  });
+
+export const useCompare = (jobId: string | undefined, withId: string | undefined) =>
+  useQuery({
+    queryKey: ["jobs", "compare", jobId ?? "", withId ?? ""],
+    queryFn: () => api.compareJobs(jobId!, withId!),
+    enabled: Boolean(jobId && withId),
+    retry: false,
+  });
+
+export const useFindings = (jobId: string | undefined, filters: FindingFilters = {}) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", `findings:${JSON.stringify(filters)}`),
+    queryFn: () => api.listFindings(jobId!, filters),
+    enabled: Boolean(jobId),
+  });
+
+export const useFindingHistory = (findingId: string | undefined) =>
+  useQuery({
+    queryKey: [...keys.finding(findingId ?? ""), "history"],
+    queryFn: () => api.getFindingHistory(findingId!),
+    enabled: Boolean(findingId),
+  });
+
+/**
+ * Triage mutation. The version comes from the finding row the screen rendered, so the
+ * `If-Match` header reflects what the user actually looked at.
+ */
+export function useTriageFinding(jobId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ finding, body }: { finding: Finding; body: TriageRequest }) =>
+      api.triageFinding(finding.id, finding.version, body),
+    onSettled: (_data, _err, vars) => {
+      qc.invalidateQueries({ queryKey: keys.finding(vars.finding.id) });
+      if (jobId) qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      qc.invalidateQueries({ queryKey: ["findings"] });
+    },
+  });
+}
+
+export const useFindingEvidence = (findingId: string | undefined) =>
+  useQuery({
+    queryKey: [...keys.finding(findingId ?? ""), "evidence"],
+    queryFn: () => api.listFindingEvidence(findingId!),
+    enabled: Boolean(findingId),
+  });
+
+export const useJobEvidence = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "evidence"),
+    queryFn: () => api.listJobEvidence(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useQualityGates = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "gates"),
+    queryFn: () => api.getQualityGates(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+/** Report for a job; a 404 (not generated) resolves to null. */
+export const useReport = (jobId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "report"),
+    queryFn: () => api.getReport(jobId!).catch((e) => (notFound(e) ? null : Promise.reject(e))),
+    enabled: Boolean(jobId) && enabled,
+  });
+
+export function useApprovePlan(jobId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ decision, reason }: { decision: "approve" | "reject"; reason?: string }) =>
+      api.approvePlan(jobId, decision, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.job(jobId) });
+      qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
 export type SseStatus = "connecting" | "live" | "closed" | "error";
 
 const EVENT_TYPES = [
@@ -123,9 +274,20 @@ export function useJobEvents(jobId: string | undefined) {
         /* keep raw */
       }
       if (type !== "heartbeat") {
-        setEvents((prev) => [...prev, { id: e.lastEventId, type, data }]);
+        setEvents((prev) => [
+          ...prev,
+          { id: e.lastEventId, type, data, receivedAt: new Date().toISOString() },
+        ]);
       }
-      if (type === "job.state_changed") qc.invalidateQueries({ queryKey: keys.job(jobId) });
+      if (
+        type === "job.state_changed" ||
+        type === "task.state_changed" ||
+        type === "check.completed" ||
+        type === "job.pinned"
+      ) {
+        qc.invalidateQueries({ queryKey: keys.job(jobId) });
+        qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      }
       if (type === "stream.end") {
         es.close();
         setStatus("closed");

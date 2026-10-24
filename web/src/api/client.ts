@@ -1,18 +1,40 @@
 import type {
+  AgentRegistry,
+  Capabilities,
+  CheckRun,
+  CompareResult,
+  EvidenceContent,
+  EvidenceItem,
+  ExecutionsPage,
+  Finding,
+  FindingFilters,
   Job,
   JobCreate,
   JobDetail,
   JobListParams,
   Paginated,
+  Plan,
+  PlanApprovalResult,
   Problem,
   Project,
   ProjectCreate,
   ProjectUpdate,
+  QualityGates,
+  Report,
+  TriageRequest,
   Repository,
   RepositoryCreate,
+  TaskRecord,
+  TestExecution,
+  WorkerRun,
 } from "./types";
 
 export const API_BASE = "/api/v1";
+
+/** ETag format the API uses for mutable resources: `"<id>:v<version>"`. */
+export function etagFor(id: string, version: number): string {
+  return `"${id}:v${version}"`;
+}
 export const DEV_USER = "dev-qa-lead";
 export const DEV_ROLE = "QA Lead";
 
@@ -55,7 +77,7 @@ async function toProblem(res: Response): Promise<Problem> {
   };
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function requestRaw(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json, application/problem+json");
   headers.set("X-Dev-User", DEV_USER);
@@ -75,8 +97,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   }
   if (!res.ok) throw new ApiError(await toProblem(res));
+  return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await requestRaw(path, init);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Parse `X-Test-Counts: failed=2,passed=5` into a map. */
+export function parseTestCounts(header: string | null): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const part of (header ?? "").split(",")) {
+    const [k, v] = part.split("=");
+    if (k && v && !Number.isNaN(Number(v))) counts[k.trim()] = Number(v);
+  }
+  return counts;
 }
 
 export const api = {
@@ -112,12 +149,92 @@ export const api = {
       body: JSON.stringify(body),
       headers: { "Idempotency-Key": uuid() },
     }),
+  getCapabilities: () => request<Capabilities>("/system/capabilities"),
   cancelJob: (id: string, reason?: string) =>
     request<{ id: string; state: string }>(`/jobs/${id}/cancel`, {
       method: "POST",
       body: JSON.stringify({ reason: reason ?? null }),
     }),
+
+  // Phase 3: orchestration results, all read from persisted records.
+  getPlan: (jobId: string) => request<Plan>(`/jobs/${jobId}/plan`),
+  approvePlan: (jobId: string, decision: "approve" | "reject", reason?: string) =>
+    request<PlanApprovalResult>(`/jobs/${jobId}/plan/approval`, {
+      method: "POST",
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    }),
+  listTasks: (jobId: string) => request<Paginated<TaskRecord>>(`/jobs/${jobId}/tasks`),
+  listExecutions: async (jobId: string, status?: string[]): Promise<ExecutionsPage> => {
+    const q = new URLSearchParams({ limit: "500" });
+    if (status?.length) q.set("status", status.join(","));
+    const res = await requestRaw(`/jobs/${jobId}/test-executions?${q.toString()}`);
+    const page = (await res.json()) as Paginated<TestExecution>;
+    const counts = parseTestCounts(res.headers.get("X-Test-Counts"));
+    const items = Array.isArray(page.items) ? page.items : [];
+    return { ...page, items, counts };
+  },
+  // Phase 2: Execution Service results.
+  listChecks: (jobId: string) => request<CheckRun[]>(`/jobs/${jobId}/checks`),
+  listWorkerRuns: (jobId: string) => request<WorkerRun[]>(`/jobs/${jobId}/worker-runs`),
+  getEvidenceContent: (id: string) => request<EvidenceContent>(`/evidence/${id}/content`),
+  compareJobs: (jobId: string, withId: string) =>
+    request<CompareResult>(`/jobs/${jobId}/compare?with=${encodeURIComponent(withId)}`),
+  listFindings: (jobId: string, filters: FindingFilters = {}) => {
+    const q = new URLSearchParams();
+    if (filters.severity?.length) q.set("severity", filters.severity.join(","));
+    if (filters.confidence?.length) q.set("confidence", filters.confidence.join(","));
+    if (filters.status?.length) q.set("status", filters.status.join(","));
+    const qs = q.toString();
+    return request<Paginated<Finding>>(`/jobs/${jobId}/findings${qs ? `?${qs}` : ""}`);
+  },
+  getFinding: (findingId: string) => request<Finding>(`/findings/${findingId}`),
+  getFindingHistory: (findingId: string) =>
+    request<Paginated<Finding>>(`/findings/${findingId}/history`),
+  /** Sends `If-Match` built from the version the caller last read, so a stale read is a 412. */
+  triageFinding: (findingId: string, version: number, body: TriageRequest) =>
+    request<Finding>(`/findings/${findingId}/triage`, {
+      method: "POST",
+      headers: { "If-Match": etagFor(findingId, version) },
+      body: JSON.stringify(body),
+    }),
+  listFindingEvidence: (findingId: string) =>
+    request<Paginated<EvidenceItem>>(`/findings/${findingId}/evidence`),
+  listJobEvidence: (jobId: string) => request<Paginated<EvidenceItem>>(`/jobs/${jobId}/evidence`),
+  getQualityGates: (jobId: string) => request<QualityGates>(`/jobs/${jobId}/quality-gates`),
+  getReport: (jobId: string) => request<Report>(`/jobs/${jobId}/report`),
+  listAgents: () => request<AgentRegistry>("/system/agents"),
 };
+
+/** Same-origin URL of the HTML report; the dev auth travels as query parameters like SSE. */
+export function reportHtmlUrl(jobId: string): string {
+  return `${API_BASE}/jobs/${jobId}/report?format=html&dev_user=${DEV_USER}&dev_role=${encodeURIComponent(DEV_ROLE)}`;
+}
+
+/**
+ * Call an endpoint that is expected to be unavailable in this build and return its problem+json
+ * (for example `planned_slice` on a 501). Returns null if the endpoint unexpectedly succeeded.
+ */
+export async function probe(path: string): Promise<Problem | null> {
+  const headers = new Headers({
+    Accept: "application/json, application/problem+json",
+    "X-Dev-User": DEV_USER,
+    "X-Dev-Role": DEV_ROLE,
+    "X-Correlation-ID": uuid(),
+  });
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { headers });
+    if (res.ok) return null;
+    return await toProblem(res);
+  } catch (err) {
+    return {
+      type: "about:blank",
+      title: "API unreachable",
+      status: 0,
+      detail: err instanceof Error ? err.message : "Network error",
+      error_code: "network_error",
+    };
+  }
+}
 
 export function eventsUrl(jobId: string): string {
   return `${API_BASE}/jobs/${jobId}/events?dev_user=${DEV_USER}&dev_role=${encodeURIComponent(DEV_ROLE)}`;

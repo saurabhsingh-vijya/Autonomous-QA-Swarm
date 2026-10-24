@@ -133,10 +133,35 @@ class TestingConfig(StrictModel):
     performance: PerformanceTestingConfig | None = None
 
 
+class ApiCheck(StrictModel):
+    method: str = Field(default="GET", pattern=r"^(GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)$")
+    url: str = Field(min_length=8, max_length=2048)
+    expected_status: int = Field(default=200, ge=100, le=599)
+    priority: str = Field(default="P1", pattern=r"^P[0-2]$")
+    requirement_ref: str | None = Field(default=None, max_length=80)
+
+
+class JobInputs(StrictModel):
+    """Structured inputs the agents work from in this build (no repository intake yet)."""
+
+    requirements: list[str] = Field(default_factory=list, max_length=200)
+    api_checks: list[ApiCheck] = Field(default_factory=list, max_length=100)
+
+    @field_validator("requirements")
+    @classmethod
+    def _non_empty(cls, value: list[str]) -> list[str]:
+        cleaned = [v.strip() for v in value if v and v.strip()]
+        if any(len(v) > 2000 for v in cleaned):
+            raise ValueError("each requirement must be at most 2000 characters")
+        return cleaned
+
+
 class JobCreate(StrictModel):
     repository_id: str = Field(pattern=r"^rep_[0-9A-HJKMNP-TV-Z]{26}$")
     ref: str = Field(min_length=1, max_length=255)
     profiles: JobProfiles = Field(default_factory=JobProfiles)
+    inputs: JobInputs = Field(default_factory=JobInputs)
+    require_plan_approval: bool = False
     force_new: bool = False
     target_id: str | None = Field(default=None, pattern=r"^tgt_[0-9A-HJKMNP-TV-Z]{26}$")
     testing: TestingConfig | None = None
@@ -171,6 +196,7 @@ class JobOut(ResponseModel):
     state: JobState
     current_stage: str | None
     held_reason: str | None
+    require_plan_approval: bool
     force_new: bool
     created_by: str
     deadline_at: datetime | None
@@ -188,6 +214,9 @@ class StageProgress(ResponseModel):
 
 
 class JobDetailOut(JobOut):
+    inputs: dict[str, Any]
+    report_available: bool = False
+    plan_available: bool = False
     cancel_requested_at: datetime | None
     cancel_reason: str | None
     started_at: datetime | None
@@ -380,23 +409,49 @@ class AuditEventOut(ResponseModel):
     hash: str
 
 
+class Capability(BaseModel):
+    available: bool
+    status: str
+    planned_slice: str | None = None
+
+
 class CapabilitiesOut(BaseModel):
+    product: str = "RaOne"
     version: str
     phase: str
+    local_only: bool = True
+    external_ai_providers: str = "disabled"
+    llm_provider: str = "none"
+    telemetry_export: str = "none"
+    auth_mode: str = ""
+    database: Capability | None = None
+    storage: dict[str, Any] = Field(default_factory=dict)
+    execution_service: Capability | None = None
     execution_enabled: bool
     repository_code_execution_allowed: bool
     sandbox: str
     dev_fixture_repos: bool
     embedded_scheduler: bool
     embedded_exec_worker: bool
+    agent_runner_enabled: bool = False
     engines: list[str]
     target_engines: list[str] = Field(default_factory=list)
     local_targets_allowed: bool = False
     environment: str = "dev"
+    evidence_store: Capability | None = None
+    model_gateway: Capability | None = None
+    test_engines: list[str] = Field(default_factory=list)
+    integrations: dict[str, Capability] = Field(default_factory=dict)
+    limits: dict[str, int] = Field(default_factory=dict)
     # Startup configuration warnings (phase 6): dev auth on, fixture repos, unsandboxed execution…
     warnings: list[str] = Field(default_factory=list)
     # Endpoints that return 501 in this build, with their planned slice.
     not_implemented: list[dict[str, str]] = Field(default_factory=list)
+
+
+class PlanApprovalRequest(StrictModel):
+    decision: str = Field(pattern=r"^(approve|reject)$")
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 class JobCancelRequest(StrictModel):

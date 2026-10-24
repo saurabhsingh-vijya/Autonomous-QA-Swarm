@@ -1,4 +1,5 @@
-import type { Delta } from "../api/types.phase2";
+import type { Delta } from "../api/types";
+import type { BadgeTone } from "../components/ui";
 
 export const DELTA_LABEL: Record<Delta, string> = {
   improved: "Improved",
@@ -8,12 +9,12 @@ export const DELTA_LABEL: Record<Delta, string> = {
   removed: "Removed",
 };
 
-export const DELTA_TONE: Record<Delta, string> = {
-  improved: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  regressed: "bg-red-50 text-red-700 border-red-200",
-  unchanged: "bg-slate-100 text-slate-600 border-slate-200",
-  added: "bg-sky-50 text-sky-700 border-sky-200",
-  removed: "bg-amber-50 text-amber-800 border-amber-300",
+export const DELTA_TONE: Record<Delta, BadgeTone> = {
+  improved: "ok",
+  regressed: "danger",
+  unchanged: "neutral",
+  added: "info",
+  removed: "warn",
 };
 
 /** One-line verdict of a comparison from its delta counts (pure, unit-tested). */
@@ -38,4 +39,21 @@ export function formatDuration(ms: number | null | undefined): string {
   const m = Math.floor(ms / 60_000);
   const s = Math.round((ms % 60_000) / 1000);
   return `${m} m ${s} s`;
+}
+
+/**
+ * Human-readable finding location. Findings come from API checks (method + URL), pytest
+ * failures (file / node id) or check engines (engine + file + rule); unknown shapes fall back
+ * to their JSON so nothing is hidden.
+ */
+export function formatLocation(location: Record<string, unknown> | null | undefined): string {
+  if (!location || Object.keys(location).length === 0) return "—";
+  const s = (k: string) => (typeof location[k] === "string" ? (location[k] as string) : "");
+  if (s("method") || s("url")) return `${s("method")} ${s("url")}`.trim();
+  if (s("node_id")) return s("node_id");
+  if (s("file")) {
+    const parts = [s("engine"), s("file"), s("rule") ? `rule ${s("rule")}` : ""].filter(Boolean);
+    return parts.join(" · ");
+  }
+  return JSON.stringify(location);
 }

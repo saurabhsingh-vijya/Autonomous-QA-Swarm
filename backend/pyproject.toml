@@ -1,7 +1,7 @@
 [project]
 name = "qaswarm"
 version = "0.1.0"
-description = "Autonomous QA Swarm control plane (slice 1a: boilerplate and foundations)"
+description = "RaOne (Autonomous AI-Powered QA Platform) control plane (slice 1a: boilerplate and foundations)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }

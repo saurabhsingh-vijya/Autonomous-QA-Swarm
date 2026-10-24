@@ -42,9 +42,9 @@ def test_dev_auth_attaches_principal_and_501_stubs_name_their_slice() -> None:
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_principal] = lambda: Principal("u", Role.QA_LEAD, "org_x", "dev")
     client = TestClient(app, raise_server_exceptions=False)
-    r = client.get("/api/v1/jobs/job_x/quality-gates")
+    r = client.get("/api/v1/jobs/job_x/performance-runs")
     assert r.status_code == 501
-    assert r.json()["error_code"] == "not_implemented" and r.json()["planned_slice"] == "2d"
+    assert r.json()["error_code"] == "not_implemented" and r.json()["planned_slice"] == "3b"
     r = client.get("/api/v1/openapi.json")
     paths = r.json()["paths"]
     assert "/api/v1/jobs/{job_id}/release-decision" in paths and "/api/v1/jobs" in paths

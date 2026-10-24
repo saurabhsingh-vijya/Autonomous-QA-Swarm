@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Autonomous QA Swarm</title>
+    <title>RaOne</title>
+    <meta
+      name="description"
+      content="RaOne — Autonomous AI-Powered QA Platform. Local-first, multi-agent software testing, defect detection, evidence collection and independent verification."
+    />
+    <meta name="application-name" content="RaOne" />
+    <script id="theme-init">
+      (function () {
+        try {
+          var t = localStorage.getItem("raone.theme");
+          if (t !== "light" && t !== "dark")
+            t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

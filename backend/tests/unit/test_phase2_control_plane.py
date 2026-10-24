@@ -219,7 +219,8 @@ def test_stage_timeline_is_derived_from_tasks_never_fabricated() -> None:
         and by["baseline_run"].status == "running"
     )
     assert (
-        by["security_testing"].status == "pending" and by["performance_testing"].status == "skipped"
+        by["security_testing"].status == "pending"
+        and by["performance_testing"].status == "not_planned"
     )
 
     failed = _stages(

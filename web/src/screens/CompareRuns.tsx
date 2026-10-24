@@ -1,30 +1,35 @@
 import { Link, useParams } from "react-router-dom";
-import { useCompare } from "../api/hooks.phase2";
-import type { CompareCheck, CompareTest } from "../api/types.phase2";
-import { DataTable, LoadingState, PageHeader, ProblemAlert, StatusBadge } from "../components";
+import { useCompare } from "../api/hooks";
+import type { CompareCheck, CompareTest, Delta } from "../api/types";
+import { Badge, DataTable, ErrorState, PageHeader, SkeletonRows, StatusBadge } from "../components";
 import { ScreenFooter } from "../layout/AppShell";
 import { DELTA_LABEL, DELTA_TONE, summarizeDeltas } from "../lib/compare";
 import { formatTime } from "../lib/format";
 
-function DeltaChip({ delta }: { delta: CompareCheck["delta"] }) {
+function DeltaChip({ delta }: { delta: Delta }) {
   return (
-    <span
-      className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${DELTA_TONE[delta]}`}
-    >
-      {DELTA_LABEL[delta]}
+    <span data-delta={delta}>
+      <Badge tone={DELTA_TONE[delta]}>{DELTA_LABEL[delta]}</Badge>
     </span>
   );
 }
 
+/**
+ * Two runs of the same repository side by side. Deltas are computed by the API from persisted
+ * check runs and test executions and describe the base job relative to the other one.
+ */
 export function CompareRunsScreen() {
   const { jobId = "", otherId = "" } = useParams();
   const cmp = useCompare(jobId, otherId);
-  if (cmp.isLoading) return <LoadingState rows={6} label="Comparing runs" />;
+  if (cmp.isLoading) return <SkeletonRows rows={6} label="Comparing runs" />;
   if (cmp.isError || !cmp.data)
     return (
       <div>
         <PageHeader crumbs={[{ label: "Jobs", to: "/jobs" }]} title="Compare runs" />
-        <ProblemAlert error={cmp.error ?? new Error("Comparison unavailable")} />
+        <ErrorState
+          error={cmp.error ?? new Error("Comparison unavailable")}
+          onRetry={() => cmp.refetch()}
+        />
       </div>
     );
   const c = cmp.data;
@@ -49,74 +54,51 @@ export function CompareRunsScreen() {
           </>
         }
       />
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
         {[c.base, c.other].map((j, i) => (
-          <div key={j.id} className="card p-4 text-sm">
-            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              {i === 0 ? "Base" : "Other"}
-            </div>
+          <section key={j.id} className="card p-4 text-sm" aria-label={i === 0 ? "Base" : "Other"}>
+            <div className="text-2xs font-medium text-muted">{i === 0 ? "Base" : "Other"}</div>
             <div className="mt-1 flex items-center gap-2">
-              <Link to={`/jobs/${j.id}`} className="font-mono text-base font-semibold text-primary">
+              <Link to={`/jobs/${j.id}`} className="mono link text-base font-semibold">
                 {j.display_id}
               </Link>
               <StatusBadge state={j.state} />
             </div>
-            <div className="mt-1 text-slate-600">
-              {j.ref} →{" "}
-              <span className="font-mono">{j.commit_sha?.slice(0, 12) ?? "not pinned"}</span> ·{" "}
-              {formatTime(j.created_at)}
+            <div className="mt-1 text-muted">
+              <span className="mono">{j.ref}</span> →{" "}
+              <span className="mono">{j.commit_sha?.slice(0, 12) ?? "not pinned"}</span>
+              {j.created_at ? ` · ${formatTime(j.created_at)}` : ""}
             </div>
-            <div className="mt-1 text-xs text-slate-500">
+            <div className="mt-1 text-xs text-muted">
               tests: {counts(i === 0 ? c.test_counts.base : c.test_counts.other)}
             </div>
-          </div>
+          </section>
         ))}
       </div>
-      <section className="card mb-6">
-        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
+      <section className="card mb-5" aria-labelledby="cmp-checks-heading">
+        <h2
+          id="cmp-checks-heading"
+          className="border-b border-line px-3.5 py-2.5 text-sm font-semibold text-text"
+        >
           Checks
         </h2>
-        <DataTable<CompareCheck>
-          caption="Check comparison"
-          rows={c.checks}
-          rowKey={(r) => `${r.engine}:${r.name}`}
-          columns={[
-            {
-              key: "check",
-              header: "Check",
-              render: (r) => <span className="font-mono text-xs">{r.engine}</span>,
-            },
-            {
-              key: "base",
-              header: c.base.display_id,
-              render: (r) => (r.base ? <StatusBadge state={r.base} /> : "—"),
-            },
-            {
-              key: "other",
-              header: c.other.display_id,
-              render: (r) => (r.other ? <StatusBadge state={r.other} /> : "—"),
-            },
-            { key: "delta", header: "Δ", render: (r) => <DeltaChip delta={r.delta} /> },
-          ]}
-        />
-      </section>
-      <section className="card">
-        <h2 className="border-b border-slate-200 px-4 py-3 text-sm font-semibold text-slate-900">
-          Tests that changed{" "}
-          <span className="font-normal text-slate-500">{c.tests.length} shown</span>
-        </h2>
-        {c.tests.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">No test changed status between the two runs.</p>
+        {c.checks.length === 0 ? (
+          <p className="p-4 text-sm text-muted">Neither run recorded a check.</p>
         ) : (
-          <DataTable<CompareTest>
-            caption="Test comparison"
-            rows={c.tests}
-            rowKey={(r) => r.node_id}
+          <DataTable<CompareCheck>
+            caption="Check comparison"
+            rows={c.checks}
+            rowKey={(r) => `${r.engine}:${r.name}`}
             columns={[
               {
-                key: "test",
-                header: "Test",
-                render: (r) => <span className="font-mono text-xs">{r.node_id}</span>,
+                key: "check",
+                header: "Check",
+                render: (r) => (
+                  <span>
+                    <span className="mono text-muted">{r.engine}</span>{" "}
+                    <span className="text-text">{r.name}</span>
+                  </span>
+                ),
               },
               {
                 key: "base",
@@ -128,7 +110,42 @@ export function CompareRunsScreen() {
                 header: c.other.display_id,
                 render: (r) => (r.other ? <StatusBadge state={r.other} /> : "—"),
               },
-              { key: "delta", header: "Δ", render: (r) => <DeltaChip delta={r.delta} /> },
+              { key: "delta", header: "Delta", render: (r) => <DeltaChip delta={r.delta} /> },
+            ]}
+          />
+        )}
+      </section>
+      <section className="card" aria-labelledby="cmp-tests-heading">
+        <h2
+          id="cmp-tests-heading"
+          className="border-b border-line px-3.5 py-2.5 text-sm font-semibold text-text"
+        >
+          Tests that changed <span className="font-normal text-muted">{c.tests.length} shown</span>
+        </h2>
+        {c.tests.length === 0 ? (
+          <p className="p-4 text-sm text-muted">No test changed status between the two runs.</p>
+        ) : (
+          <DataTable<CompareTest>
+            caption="Test comparison"
+            rows={c.tests}
+            rowKey={(r) => r.node_id}
+            columns={[
+              {
+                key: "test",
+                header: "Test",
+                render: (r) => <span className="mono text-xs">{r.node_id}</span>,
+              },
+              {
+                key: "base",
+                header: c.base.display_id,
+                render: (r) => (r.base ? <StatusBadge state={r.base} /> : "—"),
+              },
+              {
+                key: "other",
+                header: c.other.display_id,
+                render: (r) => (r.other ? <StatusBadge state={r.other} /> : "—"),
+              },
+              { key: "delta", header: "Delta", render: (r) => <DeltaChip delta={r.delta} /> },
             ]}
           />
         )}

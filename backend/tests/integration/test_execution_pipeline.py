@@ -49,6 +49,7 @@ def settings(tmp_path: Path, test_settings: Settings) -> Settings:
         lease_ttl_seconds=90,
         task_wall_clock_seconds=120,
         sse_heartbeat_seconds=1,
+        runner_enabled=False,
     )
 
 
@@ -113,6 +114,9 @@ def _drive(
         run_until_idle(scheduler, max_ticks=10)
         while worker.run_once():
             pass
+        with session_scope() as s:  # agent tasks (AG-08 evidence, AG-11 report) run in-process
+            while scheduler.orchestrator.run_once(s):
+                pass
         run_until_idle(scheduler, max_ticks=10)
         job = client.get(f"/api/v1/jobs/{job_id}", headers=LEAD).json()
         if job["state"] in {
@@ -152,9 +156,11 @@ def test_full_pipeline_runs_real_checks_and_persists_everything(
     assert dup.status_code == 409 and dup.json()["existing_job"]["id"] == job["id"]
 
     final = _drive(client, settings, _worker(client, settings, tmp_path, allow=True), job["id"])
-    assert final["state"] == "completed", final
+    # Every check and agent task succeeded; the verdict carries warnings because no supplied
+    # scenarios exist for QG-04 (inconclusive) — never silently "completed".
+    assert final["state"] == "completed_with_warnings", final
     assert final["commit_sha"] and len(final["commit_sha"]) == 40 and final["snapshot_sha256"]
-    assert final["task_summary"] == {"succeeded": 4}
+    assert final["task_summary"] == {"succeeded": 6}  # env + 3 checks + evidence + report
     assert final["check_summary"] == {
         "passed": 2,
         "failed": 2,
@@ -164,8 +170,10 @@ def test_full_pipeline_runs_real_checks_and_persists_everything(
     # Tasks succeeded even though checks failed: test failures are results, not task errors.
     assert stages["intake_and_pinning"] == "succeeded" and stages["baseline_run"] == "succeeded"
     assert (
-        stages["security_testing"] == "skipped" and stages["cleanup_and_retention"] == "succeeded"
+        stages["security_testing"] == "not_planned"
+        and stages["cleanup_and_retention"] == "succeeded"
     )
+    assert stages["evidence_correlation_and_triage"] == "succeeded"
 
     checks = client.get(f"/api/v1/jobs/{job['id']}/checks", headers=LEAD).json()
     by_engine = {c["engine_id"]: c for c in checks}
@@ -196,12 +204,19 @@ def test_full_pipeline_runs_real_checks_and_persists_everything(
     failed = tests.json()["items"][0]
     assert failed["message"] and failed["commit_sha"] == final["commit_sha"]
 
-    tasks = client.get(f"/api/v1/jobs/{job['id']}/tasks", headers=LEAD).json()
-    assert len(tasks) == 4 and all(t["attempts"][0]["outcome"] == "succeeded" for t in tasks)
+    tasks = client.get(f"/api/v1/jobs/{job['id']}/tasks", headers=LEAD).json()["items"]
+    assert len(tasks) == 6 and all(t["attempts"][0]["outcome"] == "succeeded" for t in tasks)
     env = next(t for t in tasks if t["task_type"] == "env_prepare")
-    assert all(env["id"] in t["depends_on"] for t in tasks if t["task_type"] == "check")
+    assert all(env["id"] in t["depends_on"]["tasks"] for t in tasks if t["task_type"] == "check")
+    # The failing pytest tests became findings with evidence (phase 5 on phase 2 data).
+    findings = client.get(f"/api/v1/jobs/{job['id']}/findings", headers=LEAD).json()["items"]
+    cats = {f["category"] for f in findings}
+    assert "test.failure" in cats and "code.syntax" in cats
+    syntax = next(f for f in findings if f["category"] == "code.syntax")
+    assert "legacy_report.py" in syntax["location"]["file"] and syntax["evidence_ids"]["items"]
+    assert syntax["root_causes"]["items"][0]["verified"] is False
 
-    evidence = client.get(f"/api/v1/jobs/{job['id']}/evidence", headers=LEAD).json()
+    evidence = client.get(f"/api/v1/jobs/{job['id']}/evidence", headers=LEAD).json()["items"]
     kinds = {e["kind"] for e in evidence}
     assert {
         "log",
@@ -225,7 +240,8 @@ def test_full_pipeline_runs_real_checks_and_persists_everything(
         "passed": 2,
         "failed": 2,
     }
-    assert report["content"]["verdict"] is None and report["digest"]
+    assert report["generator"].startswith("AG-11") and report["content"]["verdict"] == "NOT_READY"
+    assert report["digest"] and len(report["content"]["checks"]) == 4
     html = client.get(f"/api/v1/jobs/{job['id']}/report?format=html", headers=LEAD)
     assert (
         html.status_code == 200
@@ -260,7 +276,7 @@ def test_second_run_on_fixed_ref_compares_as_improved(
     worker = _worker(client, settings, tmp_path, allow=True)
     base = _drive(client, settings, worker, _job(client, repo["id"], "main")["id"])
     other = _drive(client, settings, worker, _job(client, repo["id"], "fix-rounding")["id"])
-    assert other["state"] == "completed" and other["check_summary"] == {"passed": 4}
+    assert other["state"] == "completed_with_warnings" and other["check_summary"] == {"passed": 4}
     # the fixed run is the base; its delta is read relative to the earlier (broken) run
     cmp = client.get(f"/api/v1/jobs/{other['id']}/compare?with={base['id']}", headers=LEAD).json()
     assert cmp["same_repository"] is True and cmp["same_commit"] is False
@@ -311,7 +327,7 @@ def test_intake_failures_block_or_fail_the_job_honestly(
     run_until_idle(Scheduler(settings))
     j = client.get(f"/api/v1/jobs/{bad_ref['id']}", headers=LEAD).json()
     assert j["state"] == "failed" and j["commit_sha"] is None
-    assert client.get(f"/api/v1/jobs/{bad_ref['id']}/tasks", headers=LEAD).json() == []
+    assert client.get(f"/api/v1/jobs/{bad_ref['id']}/tasks", headers=LEAD).json()["items"] == []
 
     # Fixtures disabled → policy denial → blocked, nothing executed.
     strict = Settings(**{**settings.model_dump(), "dev_fixture_repos": False})
@@ -360,7 +376,7 @@ def test_invalid_worker_result_fails_attempt_and_retries_within_budget(
     run_until_idle(Scheduler(settings))
     j = client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()
     assert j["state"] == "failed"
-    assert j["task_summary"] == {"failed": 1, "skipped": 3}  # dependents skipped, never run
+    assert j["task_summary"] == {"failed": 1, "skipped": 5}  # dependents skipped, never run
     assert client.get(f"/api/v1/jobs/{job['id']}/report", headers=LEAD).json()["partial"] is True
 
 
@@ -486,7 +502,7 @@ def test_job_deadline_times_out_running_jobs(client: TestClient, settings: Setti
         j.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
     run_until_idle(Scheduler(settings))
     final = client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()
-    assert final["state"] == "timed_out" and final["task_summary"] == {"cancelled": 4}
+    assert final["state"] == "timed_out" and final["task_summary"] == {"cancelled": 6}
 
 
 # ------------------------------------------------------------- phase 6 hardening
@@ -632,7 +648,7 @@ def test_capabilities_expose_warnings_and_501_surface(client: TestClient) -> Non
     assert any("AQS_DEV_AUTH=true" in w for w in caps["warnings"])
     assert any("AQS_DEV_FIXTURE_REPOS=true" in w for w in caps["warnings"])
     paths = {e["path"] for e in caps["not_implemented"]}
-    assert "/api/v1/jobs/{job_id}/quality-gates" in paths
+    assert "/api/v1/jobs/{job_id}/performance-runs" in paths
     for e in caps["not_implemented"]:
         r = client.request(e["method"], e["path"].replace("{", "x").replace("}", ""), headers=LEAD)
         assert r.status_code == 501, e

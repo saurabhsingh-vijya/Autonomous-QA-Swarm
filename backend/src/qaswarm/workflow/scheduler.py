@@ -30,19 +30,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from qaswarm.api.services.targets import evaluate_target_policy
-from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings, get_settings
-from qaswarm.db.models import CheckRun, Job, Repository, Task, WorkerRun
+from qaswarm.db.models import Job, Repository, Task, WorkerRun
 from qaswarm.db.session import session_scope
 from qaswarm.domain.enums import PIPELINE_STAGES, TERMINAL_TASK_STATES, JobState, TaskState
 from qaswarm.domain.state_machines import JobEvent
 from qaswarm.intake import RefResolver, resolver_for, run_intake
 from qaswarm.intake.resolvers import IntakeError
-from qaswarm.planning import CRITICAL_TASK_TYPES, build_template_plan
 from qaswarm.planning.template import requested_activities
-from qaswarm.reporting import build_report
+from qaswarm.reporting.basic import build_report
 from qaswarm.workflow.jobs import transition_job
-from qaswarm.workflow.queue import TaskQueue, TaskSpec
+from qaswarm.workflow.orchestrator import Orchestrator
+from qaswarm.workflow.queue import TaskQueue
 
 log = logging.getLogger("qaswarm.scheduler")
 
@@ -54,6 +53,18 @@ _FAILED_TASK_STATES = {
 _WARNING_TASK_STATES = _FAILED_TASK_STATES | {TaskState.SKIPPED.value, TaskState.CANCELLED.value}
 
 ResolverFactory = Callable[[str], RefResolver]
+
+
+class _FailingResolver:
+    """Resolver stand-in that re-raises the factory's intake error inside ``run_intake``."""
+
+    name = "failed-intake"
+
+    def __init__(self, error: IntakeError) -> None:
+        self._error = error
+
+    def resolve(self, url: str, ref: str) -> Any:
+        raise self._error
 
 
 @dataclass
@@ -84,6 +95,8 @@ class Scheduler:
         self.settings = settings or get_settings()
         self.queue = queue or TaskQueue(self.settings)
         self._resolver_factory = resolver_factory or self._default_resolver
+        self.orchestrator = Orchestrator.from_settings(self.settings)
+        self.orchestrator.queue = self.queue
 
     def _default_resolver(self, url: str) -> RefResolver:
         s = self.settings
@@ -145,9 +158,15 @@ class Scheduler:
                 repo = s.execute(
                     select(Repository).where(Repository.id == job.repository_id)
                 ).scalar_one()
+                inputs = job.inputs or {}
+                has_inputs = bool(inputs.get("requirements")) or bool(inputs.get("api_checks"))
                 try:
                     resolver = self._resolver_factory(repo.url)
                 except IntakeError as exc:
+                    if has_inputs and not exc.policy:
+                        run_intake(s, job, _FailingResolver(exc), allow_unpinned=True)
+                        summary.admitted += 1
+                        continue
                     job.held_reason = None
                     transition_job(
                         s,
@@ -184,7 +203,7 @@ class Scheduler:
                     }
                     summary.admitted += 1
                     continue
-                run_intake(s, job, resolver)
+                run_intake(s, job, resolver, allow_unpinned=has_inputs)
                 summary.admitted += 1
 
     @staticmethod
@@ -230,53 +249,12 @@ class Scheduler:
                 transition_job(
                     s, job, JobEvent.PLANNER_LEASED, actor_type="service", actor_id="scheduler"
                 )
-                plan = build_template_plan(
+                self.orchestrator.plan_job(
+                    s,
                     job,
-                    repo.url,
-                    repo.provider,
+                    repository_url=repo.url,
+                    provider=repo.provider,
                     target=self._target_descriptor(s, job),
-                    fixture_targets=self.settings.dev_fixture_repos,
-                )
-                ids_by_key: dict[str, str] = {}
-                for planned in plan.tasks:
-                    spec = TaskSpec(
-                        org_id=job.org_id,
-                        job_id=job.id,
-                        stage=planned.stage,
-                        task_type=planned.task_type,
-                        inputs=planned.inputs,
-                        agent_id=planned.agent_id,
-                        depends_on=[ids_by_key[k] for k in planned.depends_on],
-                        priority=planned.priority,
-                    )
-                    task = self.queue.enqueue(s, spec)
-                    ids_by_key[planned.key] = task.id
-                job.warnings = {"items": list(plan.warnings)}
-                job.started_at = _now()
-                job.current_stage = "environment_preparation"
-                append_event(
-                    s,
-                    org_id=job.org_id,
-                    actor_type="service",
-                    actor_id="scheduler",
-                    action="job.planned",
-                    subject_type="job",
-                    subject_id=job.id,
-                    job_id=job.id,
-                    details={
-                        "planner": "template",
-                        "engines": plan.engines,
-                        "tasks": len(plan.tasks),
-                        "warnings": plan.warnings,
-                    },
-                )
-                transition_job(
-                    s,
-                    job,
-                    JobEvent.PLAN_VALID_NO_APPROVAL,
-                    actor_type="service",
-                    actor_id="scheduler",
-                    details={"tasks": len(plan.tasks), "engines": plan.engines},
                 )
                 summary.planned += 1
 
@@ -339,73 +317,18 @@ class Scheduler:
                     summary.advanced += 1
 
     def _advance_one(self, s: Session, job: Job) -> bool:
+        """Job state follows the tasks: the orchestrator's ``reconcile`` owns the transitions
+        (critical-path failure with a partial report, testing → analyzing → reporting →
+        completed). This step also keeps ``current_stage`` honest while tasks are open."""
+        before = (job.state, job.current_stage, job.version)
         tasks = list(s.execute(select(Task).where(Task.job_id == job.id)).scalars())
         if job.state == JobState.RUNNING.value:
-            critical_failed = [
-                t
-                for t in tasks
-                if t.task_type in CRITICAL_TASK_TYPES and t.state in _FAILED_TASK_STATES
-            ]
-            if critical_failed:
-                self.queue.skip_blocked_dependents(s, job.id, actor="scheduler")
-                job.current_stage = "cleanup_and_retention"
-                transition_job(
-                    s,
-                    job,
-                    JobEvent.CRITICAL_PATH_TASK_FAILED,
-                    actor_type="service",
-                    actor_id="scheduler",
-                    details={
-                        "task_id": critical_failed[0].id,
-                        "error_code": critical_failed[0].last_error_code,
-                    },
-                )
-                build_report(s, job, partial=True)
-                return True
             stage = self.current_stage(tasks)
-            if stage is not None:
-                if job.current_stage != stage:
-                    job.current_stage = stage
-                    return True
-                return False
-            job.current_stage = "evidence_correlation_and_triage"
-            transition_job(
-                s, job, JobEvent.TESTING_STAGES_DONE, actor_type="service", actor_id="scheduler"
-            )
-            return True
-        if job.state == JobState.ANALYZING.value:
-            # Evidence correlation (AG-08) is slice 2b; nothing to do beyond the transition.
-            job.current_stage = "quality_gates_and_reporting"
-            transition_job(s, job, JobEvent.TRIAGE_DONE, actor_type="service", actor_id="scheduler")
-            return True
-        if job.state == JobState.REPORTING.value:
-            report = build_report(s, job)
-            warnings = [t for t in tasks if t.state in _WARNING_TASK_STATES]
-            degraded_checks = s.execute(
-                select(func.count())
-                .select_from(CheckRun)
-                .where(CheckRun.job_id == job.id, CheckRun.outcome.in_(["skipped", "error"]))
-            ).scalar_one()
-            job.current_stage = "cleanup_and_retention"
-            event = (
-                JobEvent.REPORT_STORED_WARNINGS
-                if warnings or degraded_checks or job.warnings.get("items")
-                else JobEvent.REPORT_STORED_NO_WARNINGS
-            )
-            transition_job(
-                s,
-                job,
-                event,
-                actor_type="service",
-                actor_id="scheduler",
-                details={
-                    "report_id": report.id,
-                    "digest": report.digest,
-                    "warning_tasks": len(warnings),
-                },
-            )
-            return True
-        return False
+            if stage is not None and job.current_stage != stage:
+                job.current_stage = stage
+        self.orchestrator.reconcile(s, job)
+        s.refresh(job)
+        return (job.state, job.current_stage, job.version) != before
 
     # --------------------------------------------------------- 7 deadlines
     def deadlines(self, summary: TickSummary) -> None:
