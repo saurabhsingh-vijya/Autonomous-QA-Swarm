@@ -66,7 +66,8 @@ def _links(job: Job) -> JobLinks:
     rerun = (job.inputs or {}).get("rerun") if isinstance(job.inputs, dict) else None
     compare = None
     if isinstance(rerun, dict) and rerun.get("of_job"):
-        compare = f"/api/v1/jobs/{job.id}/compare?with={rerun['of_job']}"
+        # Base = the job that was rerun, other = this rerun: "regressed" means the rerun got worse.
+        compare = f"/api/v1/jobs/{rerun['of_job']}/compare?with={job.id}"
     return JobLinks(
         self=f"/api/v1/jobs/{job.id}", events=f"/api/v1/jobs/{job.id}/events", compare=compare
     )

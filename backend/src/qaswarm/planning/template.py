@@ -99,9 +99,9 @@ def requested_activities(job: Job) -> set[str]:
     testing = dict((job.inputs or {}).get("testing") or {})
     profiles = job.profiles or {}
     out: set[str] = set()
-    if testing.get("api"):
+    if testing.get("api") is not None:
         out.add("api")
-    if testing.get("browser"):
+    if testing.get("browser") is not None:
         out.add("browser")
     if str(profiles.get("security", "none")) in {"quick", "standard", "deep"}:
         out.add("security")
