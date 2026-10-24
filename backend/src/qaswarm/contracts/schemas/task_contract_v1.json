@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://qa-swarm.dev/schemas/task_contract/1.0",
+  "title": "Task contract v1 (LLD: Task contract schema)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "task_id", "job_id", "org_id", "stage", "task_type", "runner", "inputs",
+    "resource_budget", "network_policy", "timeout_seconds", "idempotency_key"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "task_id": { "type": "string", "pattern": "^tsk_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "job_id": { "type": "string", "pattern": "^job_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "org_id": { "type": "string", "pattern": "^org_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "stage": { "type": "string", "maxLength": 50 },
+    "task_type": { "type": "string", "maxLength": 80 },
+    "runner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tool", "adapter_version", "image_digest"],
+      "properties": {
+        "tool": { "type": "string", "maxLength": 80 },
+        "adapter_version": { "type": "string", "maxLength": 40 },
+        "image_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{8,64}$" }
+      }
+    },
+    "inputs": { "type": "object", "additionalProperties": { "type": "string", "maxLength": 4096 } },
+    "resource_budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["vcpu", "memory_mib", "pids", "disk_gib", "output_mib"],
+      "properties": {
+        "vcpu": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "memory_mib": { "type": "integer", "minimum": 256, "maximum": 32768 },
+        "pids": { "type": "integer", "minimum": 16, "maximum": 4096 },
+        "disk_gib": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "output_mib": { "type": "integer", "minimum": 1, "maximum": 50 }
+      }
+    },
+    "network_policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["dependency_fetch", "execution"],
+      "properties": {
+        "dependency_fetch": { "enum": ["none", "proxy_allowlist"] },
+        "execution": { "enum": ["none", "target_only"] },
+        "target_ref": { "type": "string", "maxLength": 200 }
+      }
+    },
+    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 7200 },
+    "idempotency_key": { "type": "string", "pattern": "^(sha256:)?[0-9a-f]{8,64}$" },
+    "proposed_by": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "agent": { "type": "string", "pattern": "^AG-(0[1-9]|1[01])$" },
+        "prompt_template": { "type": "string", "maxLength": 120 },
+        "agent_output_id": { "type": "string", "maxLength": 40 }
+      }
+    }
+  }
+}
