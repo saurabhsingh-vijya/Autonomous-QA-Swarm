@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qaswarm
+      POSTGRES_PASSWORD: qaswarm-dev-only
+      POSTGRES_DB: qaswarm
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qaswarm -d qaswarm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      AQS_DATABASE_URL: postgresql+psycopg://qaswarm:qaswarm-dev-only@postgres:5432/qaswarm
+      AQS_DEV_AUTH: "true"
+      AQS_CORS_ORIGINS: '["http://localhost:5173"]'
+      AQS_LOG_LEVEL: INFO
+    command: >
+      sh -c "alembic upgrade head && python -m qaswarm.db.seed && uvicorn qaswarm.api.app:create_app --factory --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./web
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+  # exec-host: the Execution Service host agent (qaswarm_exec) arrives in slice 1c.
+  # It runs on separate hosts, has no route to this database and leases tasks
+  # through a narrow control-plane endpoint. Intentionally not defined here yet.
+
+volumes:
+  pgdata:
