@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 
 from qaswarm import __version__
 from qaswarm.api.auth import Principal, get_principal
+from qaswarm.api.contract_table import unimplemented
 from qaswarm.api.schemas import CapabilitiesOut
 from qaswarm.config import Settings, get_settings
 
@@ -23,7 +24,7 @@ def capabilities(
 ) -> CapabilitiesOut:
     return CapabilitiesOut(
         version=__version__,
-        phase="4 — advanced testing capabilities",
+        phase="4 — advanced testing capabilities (hardened in phase 6)",
         execution_enabled=bool(settings.exec_token),
         repository_code_execution_allowed=settings.exec_allow_unsandboxed_code_execution,
         sandbox="process (no gVisor/Docker on this build)",
@@ -33,4 +34,10 @@ def capabilities(
         engines=ENGINES + TARGET_ENGINES,
         target_engines=TARGET_ENGINES,
         local_targets_allowed=settings.allow_local_targets,
+        environment=settings.environment,
+        warnings=settings.startup_warnings(),
+        not_implemented=[
+            {"method": e.method, "path": f"/api/v1{e.path}", "planned_slice": e.slice}
+            for e in unimplemented()
+        ],
     )

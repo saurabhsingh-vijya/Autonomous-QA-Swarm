@@ -4,7 +4,8 @@ Each ``tick`` runs these steps, every step in its own transaction:
 
 1. ``admit``      ``validating`` jobs → Intake & Pinning (ref → SHA) → ``queued`` / ``failed`` / ``blocked``
 2. ``plan``       ``queued`` → ``planning`` → template task DAG enqueued → ``running``
-3. ``reap``       expired leases → ``failed_retryable`` → retry or ``failed``
+3. ``reap``       expired leases → ``failed_retryable`` → retry or ``failed``; worker runs without a
+                  heartbeat for a lease TTL → destroyed (``presumed_dead``)
 4. ``expire``     tasks past the task wall clock → ``timed_out``
 5. ``propagate``  pending tasks whose dependency did not succeed → ``skipped``
 6. ``advance``    ``running`` → ``analyzing`` → ``reporting`` → ``completed[_with_warnings]`` / ``failed``
@@ -283,6 +284,11 @@ class Scheduler:
     def reap(self, summary: TickSummary) -> None:
         with session_scope() as s:
             summary.reaped += len(self.queue.reap_expired_leases(s))
+        with session_scope() as s:
+            dead = self.queue.reap_orphaned_worker_runs(s)
+            if dead:
+                log.warning("worker runs presumed dead", extra={"worker_runs": dead})
+            summary.reaped += len(dead)
 
     def expire(self, summary: TickSummary) -> None:
         with session_scope() as s:

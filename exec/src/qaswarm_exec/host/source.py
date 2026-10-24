@@ -98,10 +98,15 @@ def safe_extract_tar(
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar.getmembers():
             name = member.name
-            if name.startswith(("/", "\\")) or ".." in Path(name).parts:
+            if (
+                name.startswith(("/", "\\"))
+                or ".." in Path(name).parts
+                or ":" in name
+                or "\\" in name
+            ):
                 raise FetchError("E-EXEC-001", f"unsafe path in archive: {name}", retryable=False)
             target = (dest / name).resolve()
-            if not str(target).startswith(str(dest)):
+            if not target.is_relative_to(dest) or target == dest:
                 raise FetchError("E-EXEC-001", f"unsafe path in archive: {name}", retryable=False)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
@@ -136,6 +141,9 @@ _GIT_FLAGS = [
     "submodule.recurse=false",
     "-c",
     "core.fsmonitor=false",
+    # A redirect could point the fetch at an internal host after the control plane's checks.
+    "-c",
+    "http.followRedirects=false",
 ]
 
 
@@ -226,9 +234,18 @@ class FixtureSourceFetcher:
         ):
             raise FetchError("E-EXEC-003", "not a fixture URL", retryable=False)
         name = clean.split("/")[-1]  # https://fixtures.local/<owner>/<name>; owner is ignored
-        if not re.fullmatch(r"[A-Za-z0-9._/@-]{1,255}", ref) or ".." in ref:
+        if (
+            not re.fullmatch(r"[A-Za-z0-9._/@-]{1,255}", ref)
+            or ".." in ref
+            or ref.startswith(("-", "/"))
+            or "//" in ref
+        ):
             raise FetchError("E-EXEC-003", "invalid ref", retryable=False)
-        src = self.fixtures_dir / name / "refs" / ref
+        refs_dir = (self.fixtures_dir / name / "refs").resolve()
+        src = (refs_dir / ref).resolve()
+        # pathlib replaces the base on an absolute segment; keep the ref inside the fixture.
+        if not src.is_relative_to(refs_dir) or src == refs_dir:
+            raise FetchError("E-EXEC-003", "invalid ref", retryable=False)
         if not src.is_dir():
             raise FetchError("E-EXEC-003", f"fixture ref '{ref}' not found", retryable=False)
         actual = tree_hash(src)

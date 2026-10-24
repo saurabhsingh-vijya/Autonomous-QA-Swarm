@@ -50,7 +50,16 @@ class RefResolver(Protocol):
 
 
 def _check_ref(ref: str) -> None:
-    if not _REF_RE.match(ref) or ".." in ref or ref.startswith("-"):
+    # Git ref syntax plus path-safety: no leading '/' (pathlib would treat it as absolute), no
+    # '..' components, no option-looking values. '\\' and ':' are already outside _REF_RE.
+    if (
+        not _REF_RE.match(ref)
+        or ".." in ref
+        or ref.startswith(("-", "/"))
+        or ref.endswith("/")
+        or "//" in ref
+        or ref.endswith(".lock")
+    ):
         raise IntakeError("E-INTAKE-002", "invalid_ref", f"Ref '{ref}' is not a valid Git ref.")
 
 
@@ -75,7 +84,17 @@ class GitLsRemoteResolver:
             # ls-remote only lists refs; nothing from the repository is downloaded or run.
             git = shutil.which("git") or "git"
             proc = subprocess.run(  # noqa: S603 - fixed argv, validated https URL, no shell
-                [git, "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", *args],
+                [
+                    git,
+                    "-c",
+                    "protocol.allow=never",
+                    "-c",
+                    "protocol.https.allow=always",
+                    # A redirect could point at an internal host after the DNS check (SEC-002).
+                    "-c",
+                    "http.followRedirects=false",
+                    *args,
+                ],
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
@@ -161,12 +180,14 @@ class FixtureRefResolver:
         name = fixture_name(parts.hostname, parts.path)
         if name is None:
             raise IntakeError("E-INTAKE-001", "not_a_fixture", "Not a fixture URL.", policy=True)
-        ref_dir = self.fixtures_dir / name / "refs" / ref
+        refs_dir = (self.fixtures_dir / name / "refs").resolve()
+        ref_dir = (refs_dir / ref).resolve()
+        if not ref_dir.is_relative_to(refs_dir) or ref_dir == refs_dir:
+            raise IntakeError("E-INTAKE-002", "invalid_ref", f"Ref '{ref}' is not a valid Git ref.")
         if not ref_dir.is_dir():
             raise IntakeError(
                 "E-INTAKE-002", "unresolvable_ref", f"Fixture '{name}' has no ref '{ref}'."
             )
-        refs_dir = self.fixtures_dir / name / "refs"
         default = "main" if (refs_dir / "main").is_dir() else None
         return ResolvedRef(tree_hash(ref_dir), default, self.name)
 

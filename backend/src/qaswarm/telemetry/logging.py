@@ -11,21 +11,59 @@ from typing import Any
 
 correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", default=None)
 
+# Order matters: specific token shapes first, generic key/value shapes last. The key/value patterns
+# accept plain (``password=x``), header (``Password: x``) and JSON (``"password": "x"``) forms.
+_KV_KEYS = r"(password|passwd|pwd|secret|token|access[_-]?key|private[_-]?key|client[_-]?secret)"
 _REDACTION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?[A-Za-z0-9._\-+/=]+"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)\b(x-dev-user|x-api-key|api[_-]?key)\s*[:=]\s*\S+"), r"\1=[REDACTED]"),
-    (re.compile(r"(?i)\b(password|passwd|secret|token)\s*[:=]\s*\S+"), r"\1=[REDACTED]"),
+    (
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S),
+        "[REDACTED:private-key]",
+    ),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"), "[REDACTED:private-key]"),
     (re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b"), "[REDACTED:github-token]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"), "[REDACTED:github-token]"),
     (re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}\b"), "[REDACTED:gitlab-token]"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED:aws-access-key]"),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}\b"), "[REDACTED:slack-token]"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{20,}\b"), "[REDACTED:anthropic-key]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{32,}\b"), "[REDACTED:api-key]"),
     (
         re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
         "[REDACTED:jwt]",
     ),
+    (re.compile(r"(?i)(authorization\s*[:=]\s*)(bearer\s+)?[A-Za-z0-9._\-+/=]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-+/=]{8,}"), "Bearer [REDACTED]"),
+    (
+        re.compile(r"(?i)\b(x-dev-user|x-api-key|x-exec-token|api[_-]?key)\s*[:=]\s*\S+"),
+        r"\1=[REDACTED]",
+    ),
+    # JSON / YAML shape: "password": "value"  or  'token': 'value'  (quotes around key and value)
+    (
+        re.compile(r"(?i)([\"']" + _KV_KEYS + r"[\"']\s*[:=]\s*)[\"'][^\"'\n]*[\"']"),
+        r"\1[REDACTED]",
+    ),
+    # Plain shape: password=value, token: value, AQS_EXEC_TOKEN=value
+    (re.compile(r"(?i)\b([A-Z0-9_]*" + _KV_KEYS + r")\s*[:=]\s*\S+"), r"\1=[REDACTED]"),
     (re.compile(r"(://[^/\s:@]+:)[^@/\s]+@"), r"\1[REDACTED]@"),
 ]
 
-SENSITIVE_KEYS = frozenset({"authorization", "password", "secret", "token", "x-dev-user", "cookie"})
+SENSITIVE_KEYS = frozenset(
+    {
+        "authorization",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "x-dev-user",
+        "x-exec-token",
+        "x-api-key",
+        "api_key",
+        "cookie",
+        "set-cookie",
+        "private_key",
+        "client_secret",
+    }
+)
 
 
 def redact_text(text: str) -> str:

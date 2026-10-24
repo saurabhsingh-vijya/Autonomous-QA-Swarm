@@ -24,7 +24,7 @@ TARGET_AUTHORIZE_ROLES = (Role.ORG_ADMIN, Role.SECURITY_REVIEWER)
 def register_target(
     body: TargetCreate,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*TARGET_WRITE_ROLES),
     settings: Settings = Depends(get_settings),
 ) -> TargetOut:
@@ -37,7 +37,7 @@ def register_target(
 @router.get("", response_model=list[TargetOut])
 def list_targets(
     project_id: str | None = Query(default=None),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> list[TargetOut]:
     return svc.list_targets(session, principal, project_id=project_id)
@@ -47,7 +47,7 @@ def list_targets(
 def get_target(
     target_id: str,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> TargetOut:
     target = svc.get_target_row(session, principal, target_id)
@@ -64,7 +64,7 @@ def get_target(
 def record_authorization(
     target_id: str,
     body: AuthorizationCreate,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*TARGET_AUTHORIZE_ROLES),
 ) -> AuthorizationOut:
     return svc.create_authorization(session, principal, target_id, body, correlation_id_var.get())
@@ -78,7 +78,7 @@ def record_authorization(
 def revoke_authorization(
     target_id: str,
     authorization_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*TARGET_AUTHORIZE_ROLES),
 ) -> Response:
     svc.revoke_authorization(

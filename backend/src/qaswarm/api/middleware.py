@@ -17,6 +17,32 @@ log = logging.getLogger("qaswarm.api.request")
 
 CORRELATION_HEADER = "X-Correlation-ID"
 
+# Conservative defaults for an API that also serves evidence bytes with worker-supplied media
+# types and a self-contained HTML report. Handlers may set a stricter CSP; these never override.
+SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Resource-Policy": "same-site",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        if "content-security-policy" not in response.headers:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'"
+            )
+        if "cache-control" not in response.headers and request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(

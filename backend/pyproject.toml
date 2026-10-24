@@ -6,8 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { text = "Apache-2.0" }
 dependencies = [
-  "fastapi>=0.115,<0.116",
-  "uvicorn[standard]>=0.32,<0.33",
+  "fastapi>=0.128,<1",
+  "starlette>=1.3.1,<2",
+  "uvicorn[standard]>=0.32,<1",
   "pydantic>=2.9,<3",
   "pydantic-settings>=2.6,<3",
   "sqlalchemy>=2.0.36,<2.1",
@@ -18,10 +19,15 @@ dependencies = [
   "jsonschema>=4.23,<5",
 ]
 
+[project.optional-dependencies]
+# The embedded dev worker (AQS_EMBEDDED_EXEC_WORKER=true) imports qaswarm_exec; a production
+# control plane does not need it (the Execution Service runs on its own hosts).
+embedded = ["qaswarm-exec"]
+
 [dependency-groups]
 dev = [
-  "pytest>=8.3,<9",
-  "pytest-cov>=6.0,<7",
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=6.0,<8",
   "hypothesis>=6.115,<7",
   "httpx>=0.27,<0.29",
   "ruff>=0.8,<0.9",

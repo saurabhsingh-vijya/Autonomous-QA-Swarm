@@ -22,7 +22,7 @@ def list_audit_events(
     action: str | None = None,
     limit: int | None = Query(default=None, ge=1, le=200),
     cursor: int | None = Query(default=None, description="Return events with seq below this"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*AUDIT_ROLES),
 ) -> Paginated[AuditEventOut]:
     lim = clamp_limit(limit)

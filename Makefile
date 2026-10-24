@@ -5,7 +5,7 @@ UV ?= uv
 NPM ?= npm
 COMPOSE ?= docker compose
 
-.PHONY: setup up down logs migrate migration seed dev dev-api dev-web dev-scheduler dev-exec lint typecheck test test-unit test-integration check fmt build
+.PHONY: setup up down logs migrate migration seed dev dev-api dev-api-reload dev-web dev-scheduler dev-exec lint typecheck test test-unit test-integration check fmt build audit migrate-roundtrip
 
 setup:
 	cd backend && $(UV) sync --all-groups
@@ -31,10 +31,10 @@ seed:
 	cd backend && $(UV) run python -m qaswarm.db.seed
 
 dev-api:
-	cd backend && $(UV) run uvicorn qaswarm.api.app:create_app --factory --reload --port 8000
+	cd backend && $(UV) run python -m qaswarm.api.serve --port 8000
 
-dev-web:
-	cd web && $(NPM) run dev
+dev-api-reload:
+	cd backend && $(UV) run uvicorn qaswarm.api.app:create_app --factory --reload --port 8000
 
 dev-scheduler:
 	cd backend && $(UV) run python -m qaswarm.workflow.scheduler
@@ -42,15 +42,18 @@ dev-scheduler:
 dev-exec:
 	cd backend && AQS_EXEC_CONTROL_PLANE_URL=http://127.0.0.1:8000 $(UV) run python -m qaswarm_exec
 
+dev-web:
+	cd web && $(NPM) run dev
+
 dev:
 	@echo "Run 'make dev-api' and 'make dev-web' in two terminals (or 'make up' for Compose)."
 
 lint:
-	cd backend && $(UV) run ruff check . ../exec/src && $(UV) run ruff format --check . ../exec/src
+	cd backend && $(UV) run ruff check . && $(UV) run ruff format --check .
 	cd web && $(NPM) run lint && $(NPM) run format:check
 
 typecheck:
-	cd backend && $(UV) run mypy src ../exec/src
+	cd backend && $(UV) run python -m mypy src ../exec/src
 	cd web && $(NPM) run typecheck
 
 test-unit:
@@ -67,6 +70,13 @@ build:
 	cd web && $(NPM) run build
 
 check: lint typecheck test build
+
+audit:
+	cd backend && $(UV) run --with pip-audit python -m pip_audit --skip-editable
+	cd web && $(NPM) audit
+
+migrate-roundtrip:
+	cd backend && $(UV) run alembic upgrade head && $(UV) run alembic downgrade base && $(UV) run alembic upgrade head
 
 fmt:
 	cd backend && $(UV) run ruff check --fix . && $(UV) run ruff format .

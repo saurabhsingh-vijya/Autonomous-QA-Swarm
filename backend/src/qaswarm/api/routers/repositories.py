@@ -20,7 +20,7 @@ def list_repositories(
     project_id: str | None = None,
     limit: int | None = Query(default=None, ge=1, le=200),
     cursor: str | None = None,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> Paginated[RepositoryOut]:
     lim = clamp_limit(limit)
@@ -39,7 +39,7 @@ def list_repositories(
 def create_repository(
     body: RepositoryCreate,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*PROJECT_WRITE_ROLES),
     settings: Settings = Depends(get_settings),
 ) -> RepositoryOut:
@@ -53,7 +53,7 @@ def create_repository(
 def get_repository(
     repository_id: str,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> RepositoryOut:
     out = RepositoryOut.model_validate(svc.get_repository_row(session, principal, repository_id))

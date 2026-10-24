@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from qaswarm import __version__
 from qaswarm.api.errors import install_error_handlers
-from qaswarm.api.middleware import CorrelationIdMiddleware
+from qaswarm.api.middleware import CorrelationIdMiddleware, SecurityHeadersMiddleware
 from qaswarm.api.routers import (
     audit,
     evidence,
@@ -69,6 +69,8 @@ def _start_embedded_roles(settings: Settings, stop: threading.Event) -> list[thr
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
+    for warning in settings.startup_warnings():
+        log.warning("configuration: %s", warning)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -113,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ],
     )
     app.add_middleware(CorrelationIdMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
     install_error_handlers(app)
 
     app.include_router(health.router)
