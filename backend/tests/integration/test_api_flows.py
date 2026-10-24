@@ -344,3 +344,17 @@ def test_every_unimplemented_contract_endpoint_returns_501(
         )
         assert r.status_code == 501, (ep, r.text)
         assert r.json()["error_code"] == "not_implemented" and r.json()["planned_slice"] == ep.slice
+
+
+def test_system_capabilities_are_honest_and_secret_free(
+    client: TestClient, auth_headers: dict
+) -> None:
+    r = client.get("/api/v1/system/capabilities", headers=auth_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["product"] == "RaOne" and body["local_only"] is True
+    assert body["database"]["available"] is True
+    assert body["execution_service"]["available"] is False
+    assert body["execution_service"]["planned_slice"] == "1c"
+    assert body["test_engines"] == []
+    assert "password" not in r.text and "qaswarm-dev-only" not in r.text

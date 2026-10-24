@@ -71,3 +71,5 @@ implemented on the Phase 1a layout from `docs/build/prompts/PHASE_1A_BOILERPLATE
 - Windows dev host: `make` and `uv` installed via winget; Docker Desktop required for Postgres.
 - Hypothesis property test runtime kept small (max 200 examples).
 - SSE through Vite proxy needs `proxy` config with no buffering; documented.
+
+11. **`GET /api/v1/system/capabilities`** (added for the UI/UX phase): read-only, honest runtime capabilities for the Settings & System Health screen. Not in the contract table; recorded as a deviation like the project CRUD endpoints.

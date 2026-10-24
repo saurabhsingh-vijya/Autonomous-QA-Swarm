@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from qaswarm import __version__
 from qaswarm.api.errors import install_error_handlers
 from qaswarm.api.middleware import CorrelationIdMiddleware
-from qaswarm.api.routers import health, jobs, projects, repositories, stubs
+from qaswarm.api.routers import health, jobs, projects, repositories, stubs, system
 from qaswarm.config import Settings, get_settings
 from qaswarm.telemetry.logging import configure_logging
 
@@ -49,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(projects.router)
     api.include_router(repositories.router)
     api.include_router(jobs.router)
+    api.include_router(system.router)
     api.include_router(stubs.router)
     app.include_router(api)
     return app
