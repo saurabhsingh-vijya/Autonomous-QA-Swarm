@@ -20,10 +20,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(settings.log_level)
 
     app = FastAPI(
-        title="Autonomous QA Swarm API",
+        title="RaOne API",
         version=__version__,
         description=(
-            "Control-plane API. Slice 1a: projects, repository registration (syntactic validation), "
+            "RaOne — Autonomous AI-Powered QA Platform. Control-plane API. Slice 1a: projects, "
+            "repository registration (syntactic validation), "
             "job creation with idempotency and duplicate prevention, cancel, SSE events. Every other "
             "contract endpoint returns 501 with its planned slice. The control plane never executes "
             "repository code."

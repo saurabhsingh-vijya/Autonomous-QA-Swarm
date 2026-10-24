@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     log_level: str = "INFO"
     dev_auth: bool = False
-    problem_type_base: str = "https://qa-swarm.dev/problems/"
+    problem_type_base: str = "https://raone.dev/problems/"
     git_host_allowlist: list[str] = Field(default_factory=lambda: ["github.com", "gitlab.com"])
 
     # Job defaults (LLD): wall clock 4 h (max 12 h), task 30 min (max 2 h), lease 90 s,

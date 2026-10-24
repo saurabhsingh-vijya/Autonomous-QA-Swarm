@@ -1,7 +1,7 @@
 [project]
 name = "qaswarm-exec"
 version = "0.1.0"
-description = "Autonomous QA Swarm Execution Service host agent (skeleton; implemented in slice 1c)"
+description = "RaOne Execution Service host agent (skeleton; implemented in slice 1c)"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 

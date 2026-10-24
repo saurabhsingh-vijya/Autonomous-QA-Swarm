@@ -1,6 +1,11 @@
-# Autonomous QA Swarm
+# RaOne — Autonomous AI-Powered QA Platform
 
-An open-source, self-hostable QA platform in which specialized AI agents, coordinated by a
+RaOne is a local-first, multi-agent platform for software testing, defect detection, evidence
+collection and independent verification. It runs fully locally by default: no mandatory cloud
+services or external AI APIs. (The original concept was named "Autonomous QA Swarm"; that name
+remains only in the historical design documents under `docs/design/`.)
+
+It is an open-source, self-hostable QA platform in which specialized AI agents, coordinated by a
 deterministic workflow engine, plan and run tests against a **pinned commit** inside **disposable
 sandboxes**, correlate evidence, propose fixes for human review and independently verify them.
 

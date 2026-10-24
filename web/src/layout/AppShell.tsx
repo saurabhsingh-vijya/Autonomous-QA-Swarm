@@ -13,10 +13,8 @@ function Sidebar() {
           <Hexagon className="h-5 w-5" aria-hidden="true" />
         </div>
         <div>
-          <div className="text-sm font-semibold leading-tight text-slate-900">
-            Autonomous QA Swarm
-          </div>
-          <div className="text-xs text-slate-500">v0.1 · Concept / Phase 1a</div>
+          <div className="text-sm font-semibold leading-tight text-slate-900">RaOne</div>
+          <div className="text-xs text-slate-500">Autonomous AI-Powered QA · v0.1 · Phase 1a</div>
         </div>
       </div>
       <nav aria-label="Primary" className="flex-1 overflow-y-auto px-3 pb-4">

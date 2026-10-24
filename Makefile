@@ -1,4 +1,4 @@
-# Autonomous QA Swarm — developer commands. Plain POSIX-friendly; works from Git Bash / WSL.
+# RaOne — developer commands. Plain POSIX-friendly; works from Git Bash / WSL.
 # PowerShell equivalents are documented in README.md.
 
 UV ?= uv

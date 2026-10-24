@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://qa-swarm.dev/schemas/worker_result/1.0",
+  "$id": "https://raone.dev/schemas/worker_result/1.0",
   "title": "Worker result v1 (LLD: Worker result schema)",
   "type": "object",
   "additionalProperties": false,
