@@ -23,10 +23,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from qaswarm.api.services.targets import evaluate_target_policy
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings, get_settings
 from qaswarm.db.models import CheckRun, Job, Repository, Task, WorkerRun
@@ -36,6 +38,7 @@ from qaswarm.domain.state_machines import JobEvent
 from qaswarm.intake import RefResolver, resolver_for, run_intake
 from qaswarm.intake.resolvers import IntakeError
 from qaswarm.planning import CRITICAL_TASK_TYPES, build_template_plan
+from qaswarm.planning.template import requested_activities
 from qaswarm.reporting import build_report
 from qaswarm.workflow.jobs import transition_job
 from qaswarm.workflow.queue import TaskQueue, TaskSpec
@@ -155,8 +158,51 @@ class Scheduler:
                     )
                     summary.admitted += 1
                     continue
+                refusal = self._target_refusal(s, job)
+                if refusal is not None:
+                    job.held_reason = None
+                    job.current_stage = "intake_and_pinning"
+                    transition_job(
+                        s,
+                        job,
+                        JobEvent.POLICY_DENIED,
+                        actor_type="service",
+                        actor_id="policy_engine",
+                        details={
+                            "error_code": "E-POLICY-002",
+                            "reason": refusal,
+                            "approval": "HA-01",
+                        },
+                    )
+                    job.warnings = {
+                        "items": [
+                            *job.warnings.get("items", []),
+                            f"Blocked by policy: {refusal} (a valid HA-01 target authorization is "
+                            "required; no worker was started).",
+                        ]
+                    }
+                    summary.admitted += 1
+                    continue
                 run_intake(s, job, resolver)
                 summary.admitted += 1
+
+    @staticmethod
+    def _target_refusal(s: Session, job: Job) -> str | None:
+        """Policy check before intake: a job naming a target needs a valid HA-01 attestation."""
+        target_id = (job.inputs or {}).get("target_id")
+        if not target_id:
+            return None
+        _, reason = evaluate_target_policy(s, job.org_id, str(target_id), requested_activities(job))
+        return reason
+
+    def _target_descriptor(self, s: Session, job: Job) -> dict[str, Any] | None:
+        target_id = (job.inputs or {}).get("target_id")
+        if not target_id:
+            return None
+        descriptor, _ = evaluate_target_policy(
+            s, job.org_id, str(target_id), requested_activities(job)
+        )
+        return descriptor
 
     # -------------------------------------------------------------- 2 plan
     def plan(self, summary: TickSummary) -> None:
@@ -183,7 +229,13 @@ class Scheduler:
                 transition_job(
                     s, job, JobEvent.PLANNER_LEASED, actor_type="service", actor_id="scheduler"
                 )
-                plan = build_template_plan(job, repo.url, repo.provider)
+                plan = build_template_plan(
+                    job,
+                    repo.url,
+                    repo.provider,
+                    target=self._target_descriptor(s, job),
+                    fixture_targets=self.settings.dev_fixture_repos,
+                )
                 ids_by_key: dict[str, str] = {}
                 for planned in plan.tasks:
                     spec = TaskSpec(

@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     embedded_exec_worker: bool = False
     exec_control_plane_url: str = "http://127.0.0.1:8000"
     exec_allow_unsandboxed_code_execution: bool = False
+    # Phase 4: controlled local-testing mode. Mirrors AQS_EXEC_ALLOW_LOCAL_TARGETS on the worker:
+    # when false, targets whose host is a loopback/private address literal are refused at
+    # registration (the worker refuses them again at connect time).
+    allow_local_targets: bool = False
 
 
 @lru_cache

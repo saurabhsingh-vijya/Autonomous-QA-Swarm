@@ -213,7 +213,7 @@ def test_api_engine_runs_the_fixture_suite_against_the_local_target(tmp_path: Pa
     statuses = {t.node_id: t.status for t in r.tests}
     assert statuses["items-api::create and fetch an item::fetch created item"] == "passed"
     report = json.loads(ctx.evidence.of_kind("api_test_report")[0]["content"])  # type: ignore[attr-defined]
-    created = [s for s in report["steps"] if s["step"] == "create item"][0]
+    created = next(s for s in report["steps"] if s["step"] == "create item")
     assert created["response"]["status"] == 201 and created["captured"] == ["item_id"]
     assert all(a["passed"] for a in created["assertions"])
 
@@ -319,7 +319,7 @@ def test_security_checks_are_read_only_and_find_the_planted_issues(tmp_path: Pat
     )
     report = json.loads(ctx.evidence.of_kind("security_report")[0]["content"])  # type: ignore[attr-defined]
     assert "certification" in report["disclaimer"]
-    login = [o for o in report["observations"] if o["path"] == "/login"][0]
+    login = next(o for o in report["observations"] if o["path"] == "/login")
     assert login["headers"]["set-cookie"] == "[REDACTED]"
     assert r.summary["high"] == 1 and r.summary["medium"] >= 3
     # Only GET requests were issued: the item store is untouched.
@@ -464,7 +464,7 @@ def test_browser_engine_negative_scenarios(tmp_path: Path) -> None:
 
 # -------------------------------------------------------------------- registry
 def test_registry_exposes_phase4_engines() -> None:
-    assert TARGET_ENGINES <= set(ENGINES) and len(ENGINES) == 8
+    assert set(ENGINES) >= TARGET_ENGINES and len(ENGINES) == 8
     for engine_id in TARGET_ENGINES:
         engine = get_engine(engine_id)
         assert engine.executes_repository_code is False and engine.tool_version()

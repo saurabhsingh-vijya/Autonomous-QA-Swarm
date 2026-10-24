@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +27,8 @@ from qaswarm.api.schemas import (
     JobDetailOut,
     JobLinks,
     JobOut,
+    JobProfiles,
+    RerunRequest,
     StageProgress,
 )
 from qaswarm.api.services.repositories import get_repository_row
@@ -37,6 +40,8 @@ from qaswarm.db.models import (
     Job,
     Organization,
     OutboxEvent,
+    Repository,
+    TargetEnvironment,
     Task,
     TestExecution,
     WorkerRun,
@@ -45,6 +50,7 @@ from qaswarm.db.session import session_factory
 from qaswarm.domain.enums import PIPELINE_STAGES, TERMINAL_JOB_STATES, JobState, Role
 from qaswarm.domain.ids import display_id, new_id
 from qaswarm.domain.state_machines import JobEvent, JobStateMachine
+from qaswarm.planning.template import KNOWN_ENGINES
 from qaswarm.workflow.jobs import transition_job
 from qaswarm.workflow.queue import TaskQueue
 
@@ -57,7 +63,13 @@ def profile_hash(profiles: dict[str, Any]) -> str:
 
 
 def _links(job: Job) -> JobLinks:
-    return JobLinks(self=f"/api/v1/jobs/{job.id}", events=f"/api/v1/jobs/{job.id}/events")
+    rerun = (job.inputs or {}).get("rerun") if isinstance(job.inputs, dict) else None
+    compare = None
+    if isinstance(rerun, dict) and rerun.get("of_job"):
+        compare = f"/api/v1/jobs/{job.id}/compare?with={rerun['of_job']}"
+    return JobLinks(
+        self=f"/api/v1/jobs/{job.id}", events=f"/api/v1/jobs/{job.id}/events", compare=compare
+    )
 
 
 def _columns(job: Job) -> dict[str, Any]:
@@ -218,6 +230,7 @@ def create_job(
     idempotency_key: str,
     settings: Settings,
     correlation_id: str | None,
+    inputs_override: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     if body.force_new and principal.role is not Role.QA_LEAD:
         raise Problem(
@@ -228,7 +241,12 @@ def create_job(
         )
     repo = get_repository_row(session, principal, body.repository_id)
     profiles = body.profiles.model_dump(mode="json")
-    phash = profile_hash(profiles)
+    inputs = (
+        inputs_override
+        if inputs_override is not None
+        else job_inputs(session, principal, repo, body)
+    )
+    phash = profile_hash({**profiles, "inputs": inputs} if inputs else profiles)
 
     existing = session.execute(
         select(Job)
@@ -268,6 +286,7 @@ def create_job(
         display_id=display_id("QJ", org.job_sequence),
         ref=body.ref,
         profiles=profiles,
+        inputs=inputs,
         profile_hash=phash,
         state=JobState.CREATED.value,
         force_new=body.force_new,
@@ -302,6 +321,7 @@ def create_job(
             "repository_id": repo.id,
             "ref": job.ref,
             "profiles": profiles,
+            "inputs": inputs,
             "force_new": body.force_new,
             "idempotency_key_sha256": hashlib.sha256(idempotency_key.encode()).hexdigest(),
         },
@@ -522,3 +542,109 @@ def job_event_stream(
         if max_seconds is not None and time.monotonic() - started >= max_seconds:
             return
         time.sleep(poll_seconds)
+
+
+# ---- Phase 4: job inputs (target, testing scope) and regression reruns -----------------------
+def job_inputs(
+    session: Session, principal: Principal, repo: Repository, body: JobCreate
+) -> dict[str, Any]:
+    """Validate and normalise the optional phase 4 inputs of a job. Never contains secrets."""
+    inputs: dict[str, Any] = {}
+    if body.target_id:
+        target = session.execute(
+            select(TargetEnvironment).where(
+                TargetEnvironment.id == body.target_id,
+                TargetEnvironment.org_id == principal.org_id,
+                TargetEnvironment.archived_at.is_(None),
+            )
+        ).scalar_one_or_none()
+        if target is None:
+            raise Problem(404, "not_found", "Target environment not found.")
+        if target.project_id != repo.project_id:
+            raise Problem(
+                422,
+                "validation_failed",
+                "The target belongs to a different project than the repository.",
+                errors=[{"pointer": "/target_id", "code": "project_mismatch"}],
+            )
+        inputs["target_id"] = target.id
+    if body.testing is not None:
+        testing = body.testing.model_dump(mode="json", exclude_none=True)
+        if body.target_id and testing.get("target") == "local_fixture":
+            raise Problem(
+                422,
+                "validation_failed",
+                "Choose either target_id or testing.target=local_fixture, not both.",
+                errors=[{"pointer": "/testing/target", "code": "conflict"}],
+            )
+        if testing:
+            inputs["testing"] = testing
+    return inputs
+
+
+def rerun_job(
+    session: Session,
+    principal: Principal,
+    job_id: str,
+    body: RerunRequest,
+    *,
+    settings: Settings,
+    correlation_id: str | None,
+) -> tuple[int, dict[str, Any]]:
+    """Create a new job that reruns only the selected engines of a finished job."""
+    source = get_job_row(session, principal, job_id)
+    if source.state not in {s.value for s in TERMINAL_JOB_STATES}:
+        raise Problem(
+            409,
+            "invalid_state_transition",
+            f"{source.display_id} is still {source.state}; only finished jobs can be rerun.",
+        )
+    unknown = sorted(set(body.engines) - KNOWN_ENGINES)
+    if unknown:
+        raise Problem(
+            422,
+            "validation_failed",
+            f"Unknown engine(s): {', '.join(unknown)}.",
+            errors=[
+                {"pointer": "/engines", "code": "unknown_engine", "message": e} for e in unknown
+            ],
+        )
+    repo = get_repository_row(session, principal, source.repository_id)
+    inputs = {
+        **{k: v for k, v in (source.inputs or {}).items() if k != "rerun"},
+        "rerun": {
+            "of_job": source.id,
+            "of_display_id": source.display_id,
+            "engines": sorted(set(body.engines)),
+            "reason": body.reason,
+        },
+    }
+    create = JobCreate(
+        repository_id=repo.id,
+        ref=source.ref,
+        profiles=JobProfiles.model_validate(source.profiles),
+    )
+    status_code, out = create_job(
+        session,
+        principal,
+        create,
+        idempotency_key=f"rerun:{source.id}:{uuid4().hex}",
+        settings=settings,
+        correlation_id=correlation_id,
+        inputs_override=inputs,
+    )
+    job = session.execute(select(Job).where(Job.id == out["id"])).scalar_one()
+    append_event(
+        session,
+        org_id=job.org_id,
+        actor_type="user",
+        actor_id=principal.user_id,
+        actor_role=principal.role.value,
+        action="job.rerun_requested",
+        subject_type="job",
+        subject_id=job.id,
+        job_id=job.id,
+        correlation_id=correlation_id,
+        details={"of_job": source.id, "engines": inputs["rerun"]["engines"], "reason": body.reason},
+    )
+    return status_code, {**out, "links": json.loads(_links(job).model_dump_json())}
