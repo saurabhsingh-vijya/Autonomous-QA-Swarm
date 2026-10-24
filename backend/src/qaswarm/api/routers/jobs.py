@@ -221,7 +221,17 @@ def get_report(
     if format == "json":
         return JSONResponse(content=json_loads(report.model_dump_json()))
     if format == "html":
-        return Response(content=render_html(report.content), media_type="text/html; charset=utf-8")
+        return Response(
+            content=render_html(report.content),
+            media_type="text/html; charset=utf-8",
+            # The report is self-contained: inline styles only, no scripts, no remote assets.
+            headers={
+                "Content-Security-Policy": (
+                    "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'"
+                ),
+                "Cache-Control": "private, no-store",
+            },
+        )
     raise Problem(
         501,
         "not_implemented",

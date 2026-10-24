@@ -60,8 +60,13 @@ def get_principal(
             "set AQS_DEV_AUTH=true for local development.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    user = request.headers.get("x-dev-user") or request.query_params.get("dev_user")
-    role_raw = request.headers.get("x-dev-role") or request.query_params.get("dev_role")
+    user = request.headers.get("x-dev-user")
+    role_raw = request.headers.get("x-dev-role")
+    # Query-parameter credentials only where EventSource forces them (SSE); everywhere else they
+    # would leak into access logs and browser history for no reason.
+    if request.url.path.endswith("/events"):
+        user = user or request.query_params.get("dev_user")
+        role_raw = role_raw or request.query_params.get("dev_role")
     if not user:
         raise Problem(
             401,
