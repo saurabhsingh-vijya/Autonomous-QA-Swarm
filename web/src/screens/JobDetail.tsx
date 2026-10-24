@@ -6,16 +6,23 @@ import { api, reportHtmlUrl } from "../api/client";
 import {
   useApprovePlan,
   useCancelJob,
+  useChecks,
   useExecutions,
   useFindings,
   useJob,
   useJobEvents,
+  useJobEvidence,
+  useJobs,
   usePlan,
   useTasks,
+  useWorkerRuns,
 } from "../api/hooks";
 import { problemSummary } from "../api/problem";
-import type { JobEvent, Plan, TaskRecord } from "../api/types";
+import type { EvidenceItem, JobEvent, Plan, TaskRecord, WorkerRun } from "../api/types";
 import { TERMINAL_JOB_STATES } from "../api/types";
+import { ChecksTable } from "../components/ChecksTable";
+import { EvidenceDrawer } from "../components/EvidenceDrawer";
+import { formatDuration } from "../lib/compare";
 import {
   Badge,
   Button,
@@ -43,6 +50,9 @@ import { STAGE_STATUS_LABEL, stageViews, type StageView } from "../lib/stages";
 import { screenById } from "./registry";
 
 const screen = screenById("SCR-04");
+
+/** Task types leased by the Execution Service rather than an agent. */
+const EXEC_TASK_TYPES = new Set(["env_prepare", "check"]);
 
 const NODE_CLASS: Record<StageView["status"], string> = {
   held: "border-warn bg-warn/20 ring-4 ring-warn/20",
@@ -286,7 +296,12 @@ function TaskDetails({ task }: { task: TaskRecord }) {
       </div>
       <div>
         <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Outputs</h3>
-        {task.outputs.length === 0 ? (
+        {EXEC_TASK_TYPES.has(task.task_type) ? (
+          <p className="text-sm text-muted">
+            Execution Service task{task.engine ? ` (engine ${task.engine})` : ""}: its results are
+            the check runs and test executions below, not an agent output.
+          </p>
+        ) : task.outputs.length === 0 ? (
           <p className="text-sm text-muted">No output recorded for this task.</p>
         ) : (
           <ul className="space-y-2">
@@ -457,6 +472,11 @@ export function JobDetailScreen() {
   const tasks = useTasks(jobId);
   const executions = useExecutions(jobId);
   const findings = useFindings(jobId);
+  const checks = useChecks(jobId);
+  const workerRuns = useWorkerRuns(jobId);
+  const evidence = useJobEvidence(jobId);
+  const siblings = useJobs({ repository_id: job.data?.repository_id, limit: 20 });
+  const [openEvidence, setOpenEvidence] = useState<EvidenceItem | null>(null);
 
   if (job.isLoading) return <SkeletonRows rows={6} label="Loading job" />;
   if (job.isError || !job.data)
@@ -474,7 +494,13 @@ export function JobDetailScreen() {
   const taskRows: TaskRecord[] = Array.isArray(tasks.data?.items) ? tasks.data.items : [];
   const execRows = Array.isArray(executions.data?.items) ? executions.data.items : [];
   const findingRows = Array.isArray(findings.data?.items) ? findings.data.items : [];
-  const warnings = j.warnings?.messages ?? [];
+  const warnings = Array.isArray(j.warnings) ? j.warnings : [];
+  const checkRows = Array.isArray(checks.data) ? checks.data : [];
+  const workerRows: WorkerRun[] = Array.isArray(workerRuns.data) ? workerRuns.data : [];
+  const evidenceRows = Array.isArray(evidence.data?.items) ? evidence.data.items : [];
+  const previousRuns = (Array.isArray(siblings.data?.items) ? siblings.data.items : []).filter(
+    (o) => o.id !== j.id,
+  );
   const execByStatus = execRows.reduce<Record<string, number>>((acc, e) => {
     acc[e.status] = (acc[e.status] ?? 0) + 1;
     return acc;
@@ -497,6 +523,11 @@ export function JobDetailScreen() {
               {j.commit_sha ? ` ${j.commit_sha.slice(0, 10)}` : ""}
             </span>
             {!j.commit_sha ? <Badge tone="neutral">commit not pinned</Badge> : null}
+            {j.snapshot_sha256 ? (
+              <span className="mono text-xs text-muted" title={j.snapshot_sha256}>
+                snapshot {j.snapshot_sha256.slice(0, 10)}
+              </span>
+            ) : null}
             <span>{profilesSummary(j.profiles)}</span>
             <span>created {formatTime(j.created_at)}</span>
           </span>
@@ -555,7 +586,9 @@ export function JobDetailScreen() {
           aria-label="Job warnings"
           className="mb-4 rounded-md border border-line bg-surface px-3.5 py-2.5 text-sm"
         >
-          <p className="font-medium text-text">Warnings recorded by agents</p>
+          <p className="font-medium text-text">
+            Warnings recorded by intake, the planner and agents
+          </p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5 text-muted">
             {warnings.map((w) => (
               <li key={w}>{w}</li>
@@ -631,8 +664,11 @@ export function JobDetailScreen() {
                     sortValue: (t) => t.agent_id ?? "",
                     render: (t) => (
                       <span>
-                        <span className="mono text-muted">{t.agent_id ?? "—"}</span>{" "}
+                        <span className="mono text-muted">
+                          {t.agent_id ?? (EXEC_TASK_TYPES.has(t.task_type) ? "EXEC" : "—")}
+                        </span>{" "}
                         <span className="mono text-text">{t.task_type}</span>
+                        {t.engine ? <span className="mono text-muted"> · {t.engine}</span> : null}
                       </span>
                     ),
                   },
@@ -665,6 +701,8 @@ export function JobDetailScreen() {
                           adapter={last.adapter}
                           modelRef={last.model_ref}
                         />
+                      ) : EXEC_TASK_TYPES.has(t.task_type) ? (
+                        <Badge tone="neutral">exec host</Badge>
                       ) : (
                         <span className="text-muted">—</span>
                       );
@@ -682,6 +720,41 @@ export function JobDetailScreen() {
                   },
                 ]}
                 renderExpanded={(t) => <TaskDetails task={t} />}
+              />
+            )}
+          </section>
+
+          <section className="card" aria-labelledby="checks-heading">
+            <div className="flex flex-wrap items-center gap-2 border-b border-line px-3.5 py-2.5">
+              <h2 id="checks-heading" className="text-sm font-semibold text-text">
+                Repository checks
+              </h2>
+              {Object.keys(j.check_summary ?? {}).length ? (
+                <ul className="flex flex-wrap gap-1.5" aria-label="Checks by outcome">
+                  {Object.entries(j.check_summary ?? {}).map(([s, n]) => (
+                    <li key={s} className="flex items-center gap-1">
+                      <StatusBadge state={s} />
+                      <span className="text-xs tabular-nums text-text">{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+            {checks.isError ? (
+              <div className="p-4">
+                <ProblemAlert error={checks.error} />
+              </div>
+            ) : checkRows.length === 0 ? (
+              <p className="px-3.5 py-3 text-sm text-muted">
+                {j.commit_sha
+                  ? "No check run has been recorded. Repository checks need an Execution Service (AQS_EXEC_TOKEN); otherwise the planner records a warning above."
+                  : "No repository checks: the ref was not pinned to a commit, so nothing could be fetched."}
+              </p>
+            ) : (
+              <ChecksTable
+                checks={checkRows}
+                evidence={evidenceRows}
+                onOpenEvidence={setOpenEvidence}
               />
             )}
           </section>
@@ -811,6 +884,59 @@ export function JobDetailScreen() {
               </>
             )}
           </section>
+          {workerRows.length ? (
+            <section className="card p-4" aria-labelledby="workers-heading">
+              <h2 id="workers-heading" className="mb-2 text-sm font-semibold text-text">
+                Worker runs
+              </h2>
+              <ul className="space-y-1.5 text-xs" aria-label="Worker runs">
+                {workerRows.map((w) => (
+                  <li key={w.id} className="flex flex-wrap items-center gap-1.5">
+                    <span className="mono text-muted">{w.worker_id}</span>
+                    <Badge tone="neutral">
+                      {w.runtime} · {w.isolation}
+                    </Badge>
+                    {w.outcome ? <StatusBadge state={w.outcome} /> : null}
+                    <span className="text-muted">
+                      {w.destroyed_at ? "destroyed" : w.ended_at ? "ended" : "alive"}
+                      {w.ended_at
+                        ? ` · ${formatDuration(
+                            new Date(w.ended_at).getTime() - new Date(w.started_at).getTime(),
+                          )}`
+                        : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted">
+                Process runtime on an exec host; not a sandbox. Every run is destroyed after use.
+              </p>
+            </section>
+          ) : null}
+          {previousRuns.length ? (
+            <section className="card p-4" aria-labelledby="previous-heading">
+              <h2 id="previous-heading" className="mb-2 text-sm font-semibold text-text">
+                Previous runs of this repository
+              </h2>
+              <ul className="space-y-1.5 text-xs" aria-label="Previous runs">
+                {previousRuns.slice(0, 8).map((o) => (
+                  <li key={o.id} className="flex flex-wrap items-center gap-2">
+                    <Link to={`/jobs/${o.id}`} className="mono link">
+                      {o.display_id}
+                    </Link>
+                    <StatusBadge state={o.state} />
+                    <span className="mono text-muted">
+                      {o.ref}
+                      {o.commit_sha ? ` @ ${o.commit_sha.slice(0, 8)}` : ""}
+                    </span>
+                    <Link to={`/jobs/${j.id}/compare/${o.id}`} className="link ml-auto">
+                      Compare
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {taskRows.length ? (
             <section className="card p-4" aria-labelledby="summary-heading">
               <h2 id="summary-heading" className="mb-2 text-sm font-semibold text-text">
@@ -875,6 +1001,7 @@ export function JobDetailScreen() {
           maxLength={1000}
         />
       </Dialog>
+      <EvidenceDrawer evidence={openEvidence} onClose={() => setOpenEvidence(null)} />
       <ScreenFooter id={screen.id} name={screen.name} />
     </div>
   );

@@ -26,7 +26,7 @@ describe("routing", () => {
           screen.getByRole("heading", { level: 1, name: new RegExp(title) }),
         ).toBeInTheDocument(),
       );
-      expect(screen.getByText("Concept build — no repository code executed")).toBeInTheDocument();
+      expect(screen.getByTestId("mode-pill")).toBeInTheDocument();
       expect(screen.getByText(s.id)).toBeInTheDocument();
       unmount();
     }

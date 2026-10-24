@@ -16,7 +16,9 @@ from qaswarm.config import Settings
 from qaswarm.db.models import AgentOutput, EvidenceItem, Finding, Job, Report, Task, TestExecution
 from qaswarm.db.session import session_factory
 from qaswarm.domain.enums import ErrorClass
+from qaswarm.intake.resolvers import IntakeError
 from qaswarm.workflow.orchestrator import Orchestrator
+from qaswarm.workflow.scheduler import Scheduler
 
 pytestmark = pytest.mark.integration
 
@@ -27,8 +29,21 @@ def _transport(method: str, url: str) -> tuple[int, dict[str, str], str]:
     return 500, {}, "boom"
 
 
+def _unreachable(url: str) -> object:
+    """Resolver factory for repositories that cannot be contacted in tests (no network)."""
+    raise IntakeError("E-INTAKE-002", "unreachable", "no network in tests", policy=False)
+
+
 def _orch(settings: Settings) -> Orchestrator:
     return Orchestrator.from_settings(settings, http=HttpChecker(transport=_transport))
+
+
+def _sched(settings: Settings) -> Scheduler:
+    return Scheduler(settings, resolver_factory=_unreachable)
+
+
+def _run(settings: Settings, session, job_id: str, **kw):  # type: ignore[no-untyped-def]
+    return _orch(settings).run_job_to_completion(session, job_id, scheduler=_sched(settings), **kw)
 
 
 def _repo(client: TestClient, headers: dict) -> str:
@@ -79,13 +94,16 @@ def test_single_job_runs_a_real_orchestration_flow_and_persists_everything(
 ) -> None:
     repo = _repo(client, auth_headers)
     job = _create(client, auth_headers, repo)
-    assert job["state"] == "running" and job["held_reason"] is None
+    assert job["state"] == "validating" and "Intake" in job["held_reason"]
 
     with session_factory()() as s:
-        done = _orch(test_settings).run_job_to_completion(s, job["id"])
+        done = _run(test_settings, s, job["id"])
         assert (
             done.state == "completed_with_warnings"
-        )  # functional scenario skipped, one check failed
+        )  # functional scenario skipped, one check failed, repository not pinned
+        assert done.commit_sha is None and any(
+            "could not be pinned" in w for w in done.warnings["items"]
+        )
         tasks = s.execute(select(Task).where(Task.job_id == job["id"])).scalars().all()
         assert {t.agent_id: t.state for t in tasks} == {
             "AG-02": "succeeded",
@@ -147,6 +165,9 @@ def test_single_job_runs_a_real_orchestration_flow_and_persists_everything(
     f = client.get(f"/api/v1/jobs/{job['id']}/findings", headers=auth_headers).json()["items"][0]
     ev = client.get(f"/api/v1/findings/{f['id']}/evidence", headers=auth_headers).json()["items"]
     assert ev and ev[0]["kind"] == "http_exchange"
+    # Agent evidence is also stored as an object, so the generic evidence endpoints work.
+    ev_meta = client.get(f"/api/v1/evidence/{ev[0]['id']}/content", headers=auth_headers).json()
+    assert ev_meta["sha256"] == ev[0]["sha256"] and "response" in (ev_meta["text"] or "")
     gates = client.get(f"/api/v1/jobs/{job['id']}/quality-gates", headers=auth_headers).json()
     assert gates["verdict"] == report.verdict and len(gates["gates"]) == 8
     rep = client.get(f"/api/v1/jobs/{job['id']}/report", headers=auth_headers).json()
@@ -165,18 +186,22 @@ def test_single_job_runs_a_real_orchestration_flow_and_persists_everything(
     ]
 
 
-def test_job_without_inputs_is_held_honestly(client: TestClient, auth_headers: dict) -> None:
+def test_job_without_inputs_is_held_honestly(
+    client: TestClient, auth_headers: dict, test_settings: Settings
+) -> None:
     repo = _repo(client, auth_headers)
     r = client.post(
         "/api/v1/jobs",
         json={"repository_id": repo, "ref": "main"},
         headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex},
     )
-    assert (
-        r.status_code == 202
-        and r.json()["state"] == "validating"
-        and "slice 1b" in r.json()["held_reason"]
-    )
+    assert r.status_code == 202 and r.json()["state"] == "validating"
+    assert "Intake" in r.json()["held_reason"]
+    # Without inputs and without a reachable repository there is nothing to run: the job fails
+    # honestly at intake instead of pretending.
+    with session_factory()() as s:
+        done = _run(test_settings, s, r.json()["id"])
+        assert done.state == "failed" and done.commit_sha is None
 
 
 def test_failed_agent_is_retried_then_job_fails_on_critical_path(
@@ -206,8 +231,7 @@ def test_failed_agent_is_retried_then_job_fails_on_critical_path(
     job = _create(client, auth_headers, repo)
     settings = test_settings.model_copy(update={"backoff_seconds": [0, 0]})
     with session_factory()() as s:
-        orch = _orch(settings)
-        done = orch.run_job_to_completion(s, job["id"], max_steps=20)
+        done = _run(settings, s, job["id"], max_steps=30)
         assert done.state == "failed"
         task = s.execute(
             select(Task).where(Task.job_id == job["id"], Task.task_type == "requirements.analyze")
@@ -227,9 +251,8 @@ def test_failed_agent_is_retried_then_job_fails_on_critical_path(
             .all()
         )
         assert {t.state for t in others} == {"skipped"}
-        assert (
-            s.execute(select(Report).where(Report.job_id == job["id"])).scalar_one_or_none() is None
-        )
+        partial = s.execute(select(Report).where(Report.job_id == job["id"])).scalar_one()
+        assert partial.partial is True and partial.generator == "basic-partial"
 
 
 def test_plan_approval_gate_requires_qa_lead_and_rejection_cancels(
@@ -237,8 +260,9 @@ def test_plan_approval_gate_requires_qa_lead_and_rejection_cancels(
 ) -> None:
     repo = _repo(client, auth_headers)
     job = _create(client, auth_headers, repo, require_plan_approval=True)
-    assert job["state"] == "awaiting_approval" and "HA-05" in job["held_reason"]
     with session_factory()() as s:
+        held = _run(test_settings, s, job["id"])
+        assert held.state == "awaiting_approval" and "HA-05" in held.held_reason
         assert s.execute(select(Task).where(Task.job_id == job["id"])).scalars().all() == []
     denied = client.post(
         f"/api/v1/jobs/{job['id']}/plan/approval",
@@ -258,6 +282,8 @@ def test_plan_approval_gate_requires_qa_lead_and_rejection_cancels(
     assert rejected.status_code == 202 and rejected.json()["state"] == "cancelled"
 
     job2 = _create(client, auth_headers, repo, require_plan_approval=True, ref="v2")
+    with session_factory()() as s:
+        assert _run(test_settings, s, job2["id"]).state == "awaiting_approval"
     ok = client.post(
         f"/api/v1/jobs/{job2['id']}/plan/approval",
         json={"decision": "approve"},
@@ -265,7 +291,7 @@ def test_plan_approval_gate_requires_qa_lead_and_rejection_cancels(
     )
     assert ok.status_code == 202 and ok.json()["state"] == "running"
     with session_factory()() as s:
-        done = _orch(test_settings).run_job_to_completion(s, job2["id"])
+        done = _run(test_settings, s, job2["id"])
         assert done.state == "completed_with_warnings"
 
 
@@ -275,6 +301,8 @@ def test_cancel_during_run_marks_remaining_tasks_cancelled(
     repo = _repo(client, auth_headers)
     job = _create(client, auth_headers, repo)
     with session_factory()() as s:
+        _sched(test_settings).tick()  # intake (unpinned) + plan
+        _sched(test_settings).tick()
         orch = _orch(test_settings)
         assert orch.run_once(s) == 1  # requirements task done
     r = client.post(

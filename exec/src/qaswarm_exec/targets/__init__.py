@@ -1,1 +1,1 @@
-"""qaswarm_exec.targets: implemented in slice 1c; empty in slice 1a."""
+"""Target Environment Manager: ephemeral targets arrive in slice 3a. Empty in phase 2."""

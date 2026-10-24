@@ -3,6 +3,7 @@ import { ProjectProvider } from "./app/ProjectContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
 import { AgentGraphScreen } from "./screens/AgentGraph";
+import { CompareRunsScreen } from "./screens/CompareRuns";
 import { DashboardScreen } from "./screens/Dashboard";
 import { DefectsScreen } from "./screens/Defects";
 import { ExecutionResultsScreen } from "./screens/ExecutionResults";
@@ -42,6 +43,7 @@ export function App() {
               <Route path="/jobs" element={<JobsScreen />} />
               <Route path="/jobs/new" element={<NewJobScreen />} />
               <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+              <Route path="/jobs/:jobId/compare/:otherId" element={<CompareRunsScreen />} />
               <Route path="/agent-graph" element={<AgentGraphScreen />} />
               <Route
                 path="/results/functional"

@@ -32,6 +32,7 @@ from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings, get_settings
 from qaswarm.db.models import (
     AgentOutput,
+    CheckRun,
     EvidenceItem,
     Finding,
     Job,
@@ -45,13 +46,15 @@ from qaswarm.defects.intelligence import carry_over_status, cross_run_history, r
 from qaswarm.domain.enums import TERMINAL_TASK_STATES, ErrorClass, JobState, TaskState
 from qaswarm.domain.ids import display_id, new_id
 from qaswarm.domain.state_machines import JobEvent, JobStateMachine
-from qaswarm.planning.planner import PlanNode, build_plan, plan_hash, validate_plan
+from qaswarm.evidence import EvidenceStore
+from qaswarm.planning.combined import build_job_plan
+from qaswarm.planning.planner import PlanNode
 from qaswarm.policy.local import evaluate_api_check
+from qaswarm.reporting.basic import build_report
 from qaswarm.workflow.jobs import transition_job
 from qaswarm.workflow.queue import Lease, LeaseLost, TaskQueue, TaskSpec
 
 log = logging.getLogger("qaswarm.orchestrator")
-HELD_NO_INPUTS = "intake arrives in slice 1b"
 
 
 def _canonical(data: Any) -> str:
@@ -64,10 +67,12 @@ class Orchestrator:
     queue: TaskQueue
     llm: LLMAdapter | None = None
     http: HttpChecker | None = None
+    store: EvidenceStore | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings | None = None, **overrides: Any) -> Orchestrator:
         s = settings or get_settings()
+        store = overrides.pop("store", None) or EvidenceStore(s.evidence_dir)
         llm = overrides.pop("llm", None) or build_adapter(
             s.llm_provider,
             base_url=s.llm_base_url,
@@ -78,24 +83,25 @@ class Orchestrator:
         http = overrides.pop("http", None) or HttpChecker(
             timeout_seconds=s.api_check_timeout_seconds
         )
-        return cls(settings=s, queue=TaskQueue(s), llm=llm, http=http)
+        return cls(settings=s, queue=TaskQueue(s), llm=llm, http=http, store=store)
 
-    # ------------------------------------------------------------------ admission
-    def admit(
-        self, session: Session, job: Job, *, actor_id: str, correlation_id: str | None
-    ) -> None:
-        """validating → queued → planning (plan persisted, tasks enqueued) → running/awaiting."""
+    # ------------------------------------------------------------------ planning
+    def plan_job(
+        self,
+        session: Session,
+        job: Job,
+        *,
+        repository_url: str,
+        provider: str,
+        correlation_id: str | None = None,
+    ) -> bool:
+        """``planning`` → plan persisted and tasks enqueued → ``running`` / ``awaiting_approval``.
+
+        Called by the scheduler once Intake & Pinning has finished (with or without a commit; a
+        job that could not be pinned but carries inputs runs its agent tasks only). Returns
+        False when the plan was rejected (policy denied or invalid).
+        """
         inputs = job.inputs or {}
-        has_work = bool(inputs.get("requirements")) or bool(inputs.get("api_checks"))
-        if not has_work:
-            job.held_reason = (
-                "No requirements or API checks were supplied; repository intake "
-                + HELD_NO_INPUTS
-                + "."
-            )
-            job.current_stage = "intake_and_pinning"
-            return
-        # Local policy over every configured check happens before anything is scheduled.
         denied = [
             d.reason
             for c in inputs.get("api_checks", [])
@@ -119,29 +125,14 @@ class Orchestrator:
                 correlation_id=correlation_id,
                 details={"reasons": denied},
             )
-            return
-        job.held_reason = None
-        job.current_stage = "planning"
-        transition_job(
-            session,
+            return False
+        result = build_job_plan(
             job,
-            JobEvent.VALIDATION_PASSED,
-            actor_type="service",
-            actor_id="orchestrator",
-            correlation_id=correlation_id,
-            details={"note": "no repository intake in this build"},
+            repository_url=repository_url,
+            provider=provider,
+            execution_enabled=bool(self.settings.exec_token),
         )
-        transition_job(
-            session,
-            job,
-            JobEvent.PLANNER_LEASED,
-            actor_type="service",
-            actor_id="orchestrator",
-            correlation_id=correlation_id,
-        )
-        nodes = build_plan(inputs, job.profiles)
-        problems = validate_plan(nodes)
-        if problems:
+        if result.problems:
             transition_job(
                 session,
                 job,
@@ -149,10 +140,11 @@ class Orchestrator:
                 actor_type="service",
                 actor_id="orchestrator",
                 correlation_id=correlation_id,
-                details={"error_code": "E-PLAN-001", "problems": problems},
+                details={"error_code": "E-PLAN-001", "problems": result.problems},
             )
-            return
-        phash = plan_hash(nodes)
+            return False
+        nodes = result.nodes
+        phash = result.plan_hash
         plan = JobPlan(
             id=new_id("job_plan"),
             org_id=job.org_id,
@@ -163,17 +155,27 @@ class Orchestrator:
             approval_required=job.require_plan_approval,
         )
         session.add(plan)
+        existing = list((job.warnings or {}).get("items", []))
+        job.warnings = {"items": existing + [w for w in result.warnings if w not in existing]}
         append_event(
             session,
             org_id=job.org_id,
             actor_type="service",
             actor_id="orchestrator",
-            action="job.plan_created",
-            subject_type="job_plan",
-            subject_id=plan.id,
+            action="job.planned",
+            subject_type="job",
+            subject_id=job.id,
             job_id=job.id,
             correlation_id=correlation_id,
-            details={"plan_hash": phash, "nodes": len(nodes)},
+            details={
+                "planner": "deterministic",
+                "plan_id": plan.id,
+                "plan_hash": phash,
+                "engines": result.engines,
+                "tasks": len(nodes),
+                "agents": sorted({n.agent_id for n in nodes if n.agent_id != "EXEC"}),
+                "warnings": result.warnings,
+            },
         )
         if job.require_plan_approval:
             transition_job(
@@ -186,8 +188,9 @@ class Orchestrator:
                 details={"approval": "HA-05"},
             )
             job.held_reason = "Waiting for plan approval (HA-05) by a QA Lead."
-            return
+            return True
         self._start(session, job, nodes, correlation_id)
+        return True
 
     def approve_plan(
         self, session: Session, job: Job, *, approved: bool, correlation_id: str | None
@@ -262,20 +265,25 @@ class Orchestrator:
 
     def _enqueue(self, session: Session, job: Job, nodes: list[PlanNode]) -> None:
         ids: dict[str, str] = {}
-        for n in nodes:  # build_plan returns nodes in dependency order
+        for n in nodes:  # nodes are in dependency order
+            inputs = {k: v for k, v in n.inputs.items() if k != "priority"}
             spec = TaskSpec(
                 org_id=job.org_id,
                 job_id=job.id,
                 stage=n.stage,
                 task_type=n.task_type,
-                inputs={**n.inputs, "plan_key": n.key, "critical": n.critical},
-                agent_id=n.agent_id,
+                inputs={**inputs, "plan_key": n.key, "critical": n.critical},
+                agent_id=None if n.agent_id in ("EXEC", None) else n.agent_id,
                 depends_on=[ids[d] for d in n.depends_on],
                 soft_depends_on=[ids[d] for d in n.soft_depends_on],
+                priority=int(n.inputs.get("priority", 0)),
             )
             task = self.queue.enqueue(session, spec)
             ids[n.key] = task.id
-        job.current_stage = "functional_and_api_testing"
+        job.started_at = job.started_at or datetime.now(UTC)
+        job.current_stage = next(
+            (n.stage for n in nodes if n.stage not in ("planning",)), "functional_and_api_testing"
+        )
 
     # ------------------------------------------------------------------ dispatch
     TASK_TYPES = (
@@ -471,11 +479,11 @@ class Orchestrator:
         )
         if result.warnings:
             w = dict(job.warnings or {})
-            w.setdefault("messages", [])
+            items = list(w.get("items", []))
             for msg in result.warnings:
-                if msg not in w["messages"]:
-                    w["messages"].append(msg)
-            job.warnings = w
+                if msg not in items:
+                    items.append(msg)
+            job.warnings = {**w, "items": items}
         if task.task_type == "api.check":
             for r in result.payload["results"]:
                 idx = r.get("evidence_index")
@@ -486,6 +494,7 @@ class Orchestrator:
                         job_id=job.id,
                         task_id=task.id,
                         scenario_id=r["scenario_id"],
+                        node_id=str(r.get("scenario_id") or r["name"])[:500],
                         test_type="api",
                         name=r["name"],
                         status=r["status"],
@@ -513,6 +522,7 @@ class Orchestrator:
                         job_id=job.id,
                         task_id=task.id,
                         scenario_id=r["scenario_id"],
+                        node_id=str(r.get("scenario_id") or r["name"])[:500],
                         test_type="functional",
                         name=r["name"],
                         status=r["status"],
@@ -615,24 +625,34 @@ class Orchestrator:
 
     def _store_evidence(self, session: Session, job: Job, task: Task, ev: dict[str, Any]) -> str:
         body = _canonical(ev["content"])
-        sha = hashlib.sha256(body.encode()).hexdigest()
+        data = body.encode()
+        sha = hashlib.sha256(data).hexdigest()
         existing = session.execute(
             select(EvidenceItem.id).where(
-                EvidenceItem.org_id == job.org_id, EvidenceItem.sha256 == sha
+                EvidenceItem.org_id == job.org_id,
+                EvidenceItem.job_id == job.id,
+                EvidenceItem.sha256 == sha,
             )
         ).scalar_one_or_none()
         if existing:
             return existing
+        storage_key: str | None = None
+        if self.store is not None:
+            _, storage_key = self.store.put(job.org_id, data)
         item = EvidenceItem(
             id=new_id("evidence_item"),
             org_id=job.org_id,
             job_id=job.id,
             task_id=task.id,
             kind=ev["kind"],
+            label=str(ev.get("label") or ev["kind"])[:200],
             sha256=sha,
-            size_bytes=len(body.encode()),
+            storage_key=storage_key,
+            size_bytes=len(data),
+            media_type="application/json",
             producer=ev["producer"],
             content=ev["content"],
+            deterministic=True,
         )
         session.add(item)
         session.flush()
@@ -668,8 +688,35 @@ class Orchestrator:
                     "evidence_id": e.evidence_id,
                     "meta": e.meta,
                     "test_type": e.test_type,
+                    "node_id": e.node_id,
+                    "file": e.file,
+                    "message": e.message,
+                    "check_run_id": e.check_run_id,
                 }
                 for e in execs
+            ]
+            checks = (
+                session.execute(
+                    select(CheckRun).where(CheckRun.job_id == job.id).order_by(CheckRun.started_at)
+                )
+                .scalars()
+                .all()
+            )
+            up["check_runs"] = [
+                {
+                    "id": c.id,
+                    "engine": c.engine_id,
+                    "name": c.name,
+                    "outcome": c.outcome,
+                    "duration_ms": c.duration_ms,
+                    "failure_message": c.failure_message,
+                    "summary": c.summary,
+                    "tool": {"name": c.tool_name, "version": c.tool_version},
+                    "executes_repository_code": c.executes_repository_code,
+                    "log_evidence_id": c.log_evidence_id,
+                    "evidence_ids": list((c.evidence or {}).get("items", [])),
+                }
+                for c in checks
             ]
             if task.task_type == "evidence.correlate":
                 ev_ids = [e.evidence_id for e in execs if e.evidence_id]
@@ -709,14 +756,15 @@ class Orchestrator:
                     "id": t.id,
                     "agent_id": t.agent_id,
                     "task_type": t.task_type,
-                    "state": t.state,
+                    # The report task itself is still running while it composes the report.
+                    "state": "succeeded" if t.id == task.id else t.state,
                     "attempts": t.attempt_count,
                     "error_class": t.last_error_class,
                     "error_code": t.last_error_code,
                 }
                 for t in session.execute(select(Task).where(Task.job_id == job.id)).scalars()
             ]
-            up["warnings"] = list((job.warnings or {}).get("messages", []))
+            up["warnings"] = list((job.warnings or {}).get("items", []))
         return up
 
     # ------------------------------------------------------------------ job progression
@@ -752,6 +800,8 @@ class Orchestrator:
                 actor_id="orchestrator",
                 details={"tasks": [t.id for t in failed_critical]},
             )
+            job.current_stage = "cleanup_and_retention"
+            build_report(session, job, partial=True)
             for t in tasks:
                 if t.state == TaskState.PENDING.value:
                     from qaswarm.domain.state_machines import (
@@ -781,8 +831,9 @@ class Orchestrator:
             by_stage.setdefault(t.stage, []).append(t)
         testing_done = all(
             t.state in terminal
-            for s in ("planning", "functional_and_api_testing")
-            for t in by_stage.get(s, [])
+            for s, ts in by_stage.items()
+            if s not in ("evidence_correlation_and_triage", "quality_gates_and_reporting")
+            for t in ts
         )
         evidence_done = testing_done and all(
             t.state in terminal for t in by_stage.get("evidence_correlation_and_triage", [])
@@ -819,6 +870,11 @@ class Orchestrator:
                     ),
                 )
             ).scalar_one()
+            degraded_checks = session.execute(
+                select(func.count())
+                .select_from(CheckRun)
+                .where(CheckRun.job_id == job.id, CheckRun.outcome.in_(["skipped", "error"]))
+            ).scalar_one()
             inconclusive = False
             report = (
                 session.execute(select(Report).where(Report.job_id == job.id)).scalars().first()
@@ -830,7 +886,13 @@ class Orchestrator:
             job.current_stage = "cleanup_and_retention"
             event = (
                 JobEvent.REPORT_STORED_WARNINGS
-                if (warnings or skipped_execs or inconclusive)
+                if (
+                    warnings
+                    or skipped_execs
+                    or degraded_checks
+                    or inconclusive
+                    or (job.warnings or {}).get("items")
+                )
                 else JobEvent.REPORT_STORED_NO_WARNINGS
             )
             transition_job(
@@ -851,16 +913,29 @@ class Orchestrator:
         return self.queue.cancel_job_tasks(session, job.id, actor=actor)
 
     # ------------------------------------------------------------------ synchronous driver (tests, CLI)
-    def run_job_to_completion(self, session: Session, job_id: str, *, max_steps: int = 50) -> Job:
+    def run_job_to_completion(
+        self, session: Session, job_id: str, *, max_steps: int = 50, scheduler: Any = None
+    ) -> Job:
+        """Synchronous driver for tests and the CLI: scheduler tick (intake, planning,
+        reaping, state advancement) followed by agent task execution until the job is terminal
+        or waits for approval. Execution Service tasks need a worker and are not run here."""
         job = session.get(Job, job_id)
         assert job is not None
         for _ in range(max_steps):
+            session.commit()
+            if scheduler is not None:
+                scheduler.tick()
+            session.expire_all()
             session.refresh(job)
             if (
                 JobStateMachine.is_terminal(JobState(job.state))
                 or job.state == JobState.AWAITING_APPROVAL.value
             ):
                 break
+            if job.state in (JobState.VALIDATING.value, JobState.QUEUED.value):
+                if scheduler is None:
+                    break  # nothing can admit the job without a scheduler
+                continue
             if self.run_once(session) == 0:
                 # Nothing leasable: maybe retries are scheduled in the future; stop to avoid spinning.
                 self.reconcile(session, job)
@@ -879,8 +954,9 @@ class Orchestrator:
                         ),
                     )
                 ).scalar_one()
-                if pending == 0:
+                if pending == 0 and scheduler is None:
                     break
                 time.sleep(0.05)
+        session.commit()
         session.refresh(job)
         return job

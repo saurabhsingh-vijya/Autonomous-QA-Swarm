@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from qaswarm.api.services.jobs import HELD_REASON
 from qaswarm.audit.chain import verify_chain
 from qaswarm.db.models import AuditEvent
 from qaswarm.db.session import session_scope
@@ -137,7 +138,7 @@ def test_repository_registration_and_syntactic_rejection(
     project = _project(client, auth_headers)
     repo = _repo(client, auth_headers, project["id"])
     assert repo["validation_status"] == "pending_validation"
-    assert "slice 1b" in repo["validation_note"]
+    assert "No code was fetched" in repo["validation_note"]
     assert (
         client.get(f"/api/v1/repositories/{repo['id']}", headers=auth_headers).json()["id"]
         == repo["id"]
@@ -189,7 +190,7 @@ def test_job_creation_is_honest_idempotent_and_duplicate_safe(
     first = _job(client, auth_headers, repo["id"], key)
     assert first.status_code == 202, first.text
     job = first.json()
-    assert job["state"] == "validating" and "slice 1b" in job["held_reason"]
+    assert job["state"] == "validating" and job["held_reason"] == HELD_REASON
     assert job["display_id"].startswith("QJ-") and job["commit_sha"] is None
     assert job["project_id"] == project["id"]
     assert first.headers["Location"] == f"/api/v1/jobs/{job['id']}"

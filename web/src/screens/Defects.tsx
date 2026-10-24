@@ -30,6 +30,7 @@ import {
 import { EvidenceDrawer } from "../components/EvidenceDrawer";
 import { JobSelect } from "../components/JobSelect";
 import { ScreenFooter } from "../layout/AppShell";
+import { formatLocation } from "../lib/compare";
 import { formatTime } from "../lib/format";
 import { useJobSelection } from "../lib/useJobSelection";
 import { screenById } from "./registry";
@@ -561,7 +562,7 @@ function FindingCard({
           <KeyValue
             items={[
               { label: "Category", value: finding.category, mono: true },
-              { label: "Location", value: JSON.stringify(finding.location), mono: true },
+              { label: "Location", value: formatLocation(finding.location), mono: true },
               { label: "Occurrences", value: finding.occurrences },
               { label: "Evidence items", value: evidenceCount },
               { label: "Executions", value: finding.test_execution_ids.items?.length ?? 0 },

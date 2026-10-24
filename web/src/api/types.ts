@@ -200,13 +200,20 @@ export interface JobStage {
   stage: string;
   status: string;
   note?: string | null;
+  tasks?: number;
 }
 
 export interface JobDetail extends Job {
   inputs?: JobInputs;
-  warnings?: { messages?: string[] };
+  /** Plain list of warnings recorded by intake, the planner and agents. */
+  warnings?: string[];
+  snapshot_sha256?: string | null;
   report_available?: boolean;
   plan_available?: boolean;
+  /** Check-run outcomes of the Execution Service engines, by outcome. */
+  check_summary?: Record<string, number>;
+  /** Test executions by status (pytest and agent executions). */
+  test_summary?: Record<string, number>;
   deadline_at: string | null;
   version: number;
   updated_at: string;
@@ -236,6 +243,19 @@ export interface Capabilities {
   database: Capability;
   storage: { driver: string; host: string; port: number; database: string };
   execution_service: Capability;
+  /** Execution Service reachable (AQS_EXEC_TOKEN configured). */
+  execution_enabled?: boolean;
+  /** Whether the exec host may run repository code (pytest) outside a sandbox. */
+  repository_code_execution_allowed?: boolean;
+  sandbox?: string;
+  dev_fixture_repos?: boolean;
+  embedded_scheduler?: boolean;
+  embedded_exec_worker?: boolean;
+  agent_runner_enabled?: boolean;
+  /** Check engines the exec host ships. */
+  engines?: string[];
+  phase?: string;
+  llm_provider?: string;
   evidence_store: Capability;
   model_gateway: Capability;
   test_engines: string[];
@@ -347,10 +367,15 @@ export interface AgentOutputRecord {
 
 export interface TaskRecord {
   id: string;
+  job_id?: string;
   stage: string;
   task_type: string;
   agent_id: string | null;
   state: TaskState;
+  /** Check engine for Execution Service `check` tasks; null for agent tasks. */
+  engine?: string | null;
+  priority?: number;
+  lease_owner?: string | null;
   attempt_count: number;
   depends_on: { tasks?: string[]; soft?: string[] };
   inputs: Record<string, unknown>;
@@ -365,6 +390,14 @@ export interface TaskRecord {
 
 export interface TestExecution {
   id: string;
+  job_id?: string;
+  task_id?: string;
+  /** Check run that produced this execution (Execution Service results only). */
+  check_run_id?: string | null;
+  /** pytest node id such as `tests/test_x.py::test_y`; empty for agent executions. */
+  node_id?: string;
+  file?: string | null;
+  commit_sha?: string | null;
   scenario_id: string | null;
   test_type: "api" | "functional" | string;
   name: string;
@@ -548,9 +581,111 @@ export interface EvidenceItem {
   size_bytes: number;
   producer: string;
   deterministic: boolean;
+  worker_run_id?: string | null;
+  label?: string;
+  redactions?: number;
+  truncated?: boolean;
+  original_bytes?: number | null;
   redaction_status: string;
-  content: Record<string, unknown>;
+  /** Inline JSON for agent evidence; null for objects stored only in the evidence store. */
+  content: Record<string, unknown> | null;
   created_at: string;
+}
+
+export interface EvidenceContent {
+  id: string;
+  media_type: string;
+  sha256: string;
+  size_bytes: number;
+  text: string | null;
+  truncated_inline: boolean;
+}
+
+// ---- Phase 2: Execution Service checks, worker runs, run comparison -----------------------
+
+export type CheckOutcome = "passed" | "failed" | "skipped" | "error";
+
+export interface CheckRun {
+  id: string;
+  job_id: string;
+  task_id: string;
+  attempt_no: number;
+  worker_run_id: string | null;
+  engine_id: string;
+  name: string;
+  outcome: CheckOutcome;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  failure_message: string | null;
+  summary: Record<string, unknown>;
+  tool_name: string;
+  tool_version: string;
+  executes_repository_code: boolean;
+  log_evidence_id: string | null;
+  evidence_ids: string[];
+}
+
+export interface WorkerRun {
+  id: string;
+  job_id: string;
+  task_id: string;
+  worker_id: string;
+  runtime: string;
+  isolation: string;
+  image_digest: string;
+  limits: Record<string, unknown>;
+  network_policy: string;
+  exit_code: number | null;
+  outcome: string | null;
+  output_bytes: number;
+  truncated: boolean;
+  started_at: string;
+  ended_at: string | null;
+  destroyed_at: string | null;
+}
+
+export type Delta = "improved" | "regressed" | "unchanged" | "added" | "removed";
+
+export interface CompareCheck {
+  engine: string;
+  name: string;
+  base: CheckOutcome | null;
+  other: CheckOutcome | null;
+  delta: Delta;
+}
+
+export interface CompareTest {
+  node_id: string;
+  base: TestStatus | null;
+  other: TestStatus | null;
+  delta: Delta;
+}
+
+export interface CompareJobRef {
+  id: string;
+  display_id: string;
+  state: JobState;
+  ref: string;
+  commit_sha: string | null;
+  created_at?: string;
+}
+
+export interface CompareResult {
+  base: CompareJobRef;
+  other: CompareJobRef;
+  same_repository: boolean;
+  same_commit: boolean;
+  checks: CompareCheck[];
+  tests: CompareTest[];
+  check_deltas: Record<string, number>;
+  test_deltas: Record<string, number>;
+  test_counts: { base: Record<string, number>; other: Record<string, number> };
+}
+
+/** Executions page plus the per-status counts the API sends in `X-Test-Counts`. */
+export interface ExecutionsPage extends Paginated<TestExecution> {
+  counts: Record<string, number>;
 }
 
 export interface QualityGate {
@@ -573,6 +708,26 @@ export interface QualityGates {
   report_digest?: string;
 }
 
+export interface ReportCheck {
+  id?: string;
+  engine: string;
+  name: string;
+  outcome: CheckOutcome | string;
+  duration_ms: number;
+  failure_message: string | null;
+  summary?: Record<string, unknown>;
+  tool?: { name: string; version: string };
+  executes_repository_code?: boolean;
+  evidence_ids?: string[];
+}
+
+export interface ReportSummary {
+  tasks?: Record<string, number>;
+  checks?: Record<string, number>;
+  tests?: Record<string, number>;
+}
+
+/** Full report written by AG-11 (gates, verdict, narrative) plus the check summary. */
 export interface ReportContent {
   verdict: Verdict;
   verdict_reason: string;
@@ -584,6 +739,23 @@ export interface ReportContent {
   generated_at?: string;
   finding_summary?: Record<string, number>;
   findings_by_priority?: FindingByPriority[];
+  summary?: ReportSummary;
+  checks?: ReportCheck[];
+  [k: string]: unknown;
+}
+
+/** Deterministic partial report stored when a job fails or is cancelled before AG-11 ran. */
+export interface PartialReportContent {
+  partial: true;
+  job: Record<string, unknown>;
+  summary: ReportSummary;
+  checks: ReportCheck[];
+  tests: { node_id: string; status: string; duration_ms: number; message: string | null }[];
+  evidence: unknown[];
+  warnings: string[];
+  limitations: string[];
+  verdict: null;
+  generated_at?: string;
   [k: string]: unknown;
 }
 
@@ -591,11 +763,17 @@ export interface Report {
   id: string;
   job_id: string;
   kind: string;
-  verdict: Verdict;
+  verdict: Verdict | null;
   generator: string;
+  partial?: boolean;
   digest: string;
   created_at: string;
-  content: ReportContent;
+  updated_at?: string;
+  content: ReportContent | PartialReportContent;
+}
+
+export function isPartialReport(r: Report): r is Report & { content: PartialReportContent } {
+  return Boolean(r.partial) || !Array.isArray((r.content as ReportContent).gates);
 }
 
 export interface AgentCatalogueEntry {

@@ -16,7 +16,9 @@ from qaswarm.audit.chain import verify_chain
 from qaswarm.config import Settings
 from qaswarm.db.models import AuditEvent, Finding
 from qaswarm.db.session import session_factory
+from qaswarm.intake.resolvers import IntakeError
 from qaswarm.workflow.orchestrator import Orchestrator
+from qaswarm.workflow.scheduler import Scheduler
 
 pytestmark = pytest.mark.integration
 
@@ -25,6 +27,10 @@ def _transport(method: str, url: str) -> tuple[int, dict[str, str], str]:
     if url.endswith("/ok"):
         return 200, {"content-type": "application/json"}, '{"ok":true}'
     return 404, {"content-type": "text/html"}, "<h1>Not Found</h1>"
+
+
+def _unreachable(url: str) -> object:
+    raise IntakeError("E-INTAKE-002", "unreachable", "no network in tests", policy=False)
 
 
 def _orch(settings: Settings) -> Orchestrator:
@@ -71,7 +77,9 @@ def _run(client: TestClient, headers: dict, repo: str, settings: Settings, ref: 
     assert r.status_code == 202, r.text
     job = r.json()
     with session_factory()() as s:
-        done = _orch(settings).run_job_to_completion(s, job["id"])
+        done = _orch(settings).run_job_to_completion(
+            s, job["id"], scheduler=Scheduler(settings, resolver_factory=_unreachable)
+        )
         assert done.state == "completed_with_warnings"
     return job
 

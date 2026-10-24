@@ -1,7 +1,11 @@
 import type {
   AgentRegistry,
   Capabilities,
+  CheckRun,
+  CompareResult,
+  EvidenceContent,
   EvidenceItem,
+  ExecutionsPage,
   Finding,
   FindingFilters,
   Job,
@@ -22,6 +26,7 @@ import type {
   RepositoryCreate,
   TaskRecord,
   TestExecution,
+  WorkerRun,
 } from "./types";
 
 export const API_BASE = "/api/v1";
@@ -72,7 +77,7 @@ async function toProblem(res: Response): Promise<Problem> {
   };
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function requestRaw(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json, application/problem+json");
   headers.set("X-Dev-User", DEV_USER);
@@ -92,8 +97,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   }
   if (!res.ok) throw new ApiError(await toProblem(res));
+  return res;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await requestRaw(path, init);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** Parse `X-Test-Counts: failed=2,passed=5` into a map. */
+export function parseTestCounts(header: string | null): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const part of (header ?? "").split(",")) {
+    const [k, v] = part.split("=");
+    if (k && v && !Number.isNaN(Number(v))) counts[k.trim()] = Number(v);
+  }
+  return counts;
 }
 
 export const api = {
@@ -144,10 +164,21 @@ export const api = {
       body: JSON.stringify({ decision, reason: reason ?? null }),
     }),
   listTasks: (jobId: string) => request<Paginated<TaskRecord>>(`/jobs/${jobId}/tasks`),
-  listExecutions: (jobId: string, status?: string[]) =>
-    request<Paginated<TestExecution>>(
-      `/jobs/${jobId}/test-executions${status?.length ? `?status=${status.join(",")}` : ""}`,
-    ),
+  listExecutions: async (jobId: string, status?: string[]): Promise<ExecutionsPage> => {
+    const q = new URLSearchParams({ limit: "500" });
+    if (status?.length) q.set("status", status.join(","));
+    const res = await requestRaw(`/jobs/${jobId}/test-executions?${q.toString()}`);
+    const page = (await res.json()) as Paginated<TestExecution>;
+    const counts = parseTestCounts(res.headers.get("X-Test-Counts"));
+    const items = Array.isArray(page.items) ? page.items : [];
+    return { ...page, items, counts };
+  },
+  // Phase 2: Execution Service results.
+  listChecks: (jobId: string) => request<CheckRun[]>(`/jobs/${jobId}/checks`),
+  listWorkerRuns: (jobId: string) => request<WorkerRun[]>(`/jobs/${jobId}/worker-runs`),
+  getEvidenceContent: (id: string) => request<EvidenceContent>(`/evidence/${id}/content`),
+  compareJobs: (jobId: string, withId: string) =>
+    request<CompareResult>(`/jobs/${jobId}/compare?with=${encodeURIComponent(withId)}`),
   listFindings: (jobId: string, filters: FindingFilters = {}) => {
     const q = new URLSearchParams();
     if (filters.severity?.length) q.set("severity", filters.severity.join(","));

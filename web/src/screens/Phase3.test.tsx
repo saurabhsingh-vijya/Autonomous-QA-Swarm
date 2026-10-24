@@ -193,7 +193,7 @@ describe("job detail after orchestration", () => {
       held_reason: "Plan approval required (HA-05)",
       report_available: false,
       task_summary: {},
-      warnings: {},
+      warnings: [],
       stages: [{ stage: "planning", status: "awaiting_approval", note: "HA-05" }],
     });
     const fetchMock = mockFetchRoutes([

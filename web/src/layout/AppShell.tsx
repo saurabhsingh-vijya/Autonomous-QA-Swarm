@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useCapabilities } from "../api/hooks";
+import { capabilityPill } from "../lib/capabilities";
 import { useProjectContext } from "../app/ProjectContext";
 import { useGlobalShortcuts } from "../app/shortcuts";
 import { CommandPalette } from "../components/CommandPalette";
@@ -24,6 +25,36 @@ import { PREF_KEYS, readPref, writePref } from "../theme/prefs";
 import { useTheme } from "../theme/ThemeProvider";
 
 export const CONCEPT_PILL = "Concept build — no repository code executed";
+function ModePill() {
+  const caps = useCapabilities();
+  const text = capabilityPill(caps.data);
+  const unsandboxed = Boolean(caps.data?.repository_code_execution_allowed);
+  const on = Boolean(caps.data?.execution_enabled);
+  const tone = unsandboxed
+    ? "border-danger/50 bg-danger/15 text-danger"
+    : on
+      ? "border-ok/50 bg-ok/15 text-ok"
+      : "border-warn/50 bg-warn/15 text-warn";
+  return (
+    <Tooltip
+      content={
+        on
+          ? "Repository checks run on an Execution Service host that leases tasks from the control plane. The control plane itself never executes repository code."
+          : "No Execution Service is configured (AQS_EXEC_TOKEN unset): jobs run their agent tasks on supplied inputs only and repository checks are not planned."
+      }
+    >
+      <span
+        className={`inline-flex h-7 cursor-default items-center gap-1.5 rounded-md border px-2 text-xs font-medium ${tone}`}
+        tabIndex={0}
+        data-testid="mode-pill"
+      >
+        <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="hidden md:inline">{text}</span>
+        <span className="md:hidden">{on ? "Execution on" : "Execution off"}</span>
+      </span>
+    </Tooltip>
+  );
+}
 
 function Sidebar({
   collapsed,
@@ -236,16 +267,7 @@ function TopBar({
         <Kbd>Ctrl</Kbd>
         <Kbd>K</Kbd>
       </button>
-      <Tooltip content="This build creates and holds jobs. It never fetches, builds or runs repository code; execution arrives in slice 1c.">
-        <span
-          className="inline-flex h-7 cursor-default items-center gap-1.5 rounded-md border border-warn/50 bg-warn/15 px-2 text-xs font-medium text-warn"
-          tabIndex={0}
-        >
-          <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="hidden md:inline">{CONCEPT_PILL}</span>
-          <span className="md:hidden">Concept build</span>
-        </span>
-      </Tooltip>
+      <ModePill />
       <RuntimeChip />
       <button
         type="button"
@@ -322,9 +344,11 @@ export function ScreenFooter({ id, name }: { id: string; name: string }) {
   return (
     <footer className="mt-10 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs text-muted">
       <span>
-        <span className="font-medium text-text">{id}</span> {name}, phase 1a
+        <span className="font-medium text-text">{id}</span> {name}, phases 2 · 3 · 5
       </span>
-      <span>Only slice 1a behaviour is implemented; nothing shown is simulated.</span>
+      <span>
+        Screens marked with a slice badge are not implemented yet; nothing shown is simulated.
+      </span>
     </footer>
   );
 }

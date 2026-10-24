@@ -37,8 +37,9 @@ from qaswarm.db.models import (
     TestExecution,
 )
 from qaswarm.defects.triage import Actor, TriageError, apply_triage
-from qaswarm.domain.enums import JobState, Role
+from qaswarm.domain.enums import JobState, Role, TestExecutionStatus
 from qaswarm.domain.ids import new_id
+from qaswarm.reporting.basic import render_html as render_basic_html
 from qaswarm.telemetry.logging import correlation_id_var
 from qaswarm.workflow.orchestrator import Orchestrator
 
@@ -88,15 +89,19 @@ class AgentOutputOut(ResponseModel):
 
 class TaskOut(ResponseModel):
     id: str
+    job_id: str
     stage: str
     task_type: str
     agent_id: str | None
     state: str
+    engine: str | None = None
+    priority: int = 0
     attempt_count: int
     depends_on: dict[str, Any]
     inputs: dict[str, Any]
     last_error_code: str | None
     last_error_class: str | None
+    lease_owner: str | None = None
     available_at: datetime
     state_changed_at: datetime
     created_at: datetime
@@ -106,6 +111,12 @@ class TaskOut(ResponseModel):
 
 class TestExecutionOut(ResponseModel):
     id: str
+    job_id: str
+    task_id: str
+    check_run_id: str | None = None
+    node_id: str = ""
+    file: str | None = None
+    commit_sha: str | None = None
     scenario_id: str | None
     test_type: str
     name: str
@@ -167,14 +178,19 @@ class EvidenceOut(ResponseModel):
     id: str
     job_id: str
     task_id: str | None
+    worker_run_id: str | None = None
     kind: str
+    label: str = ""
     media_type: str
     sha256: str
     size_bytes: int
     producer: str
     deterministic: bool
+    redactions: int = 0
+    truncated: bool = False
+    original_bytes: int | None = None
     redaction_status: str
-    content: dict[str, Any]
+    content: dict[str, Any] | None = None
     created_at: datetime
 
 
@@ -307,6 +323,7 @@ def list_tasks(
     items = []
     for t in tasks:
         out = TaskOut.model_validate(t)
+        out.engine = t.inputs.get("engine")
         out.attempts = [AttemptOut.model_validate(a) for a in attempts if a.task_id == t.id]
         out.outputs = [AgentOutputOut.model_validate(o) for o in outputs if o.task_id == t.id]
         items.append(out)
@@ -316,7 +333,9 @@ def list_tasks(
 @router.get("/jobs/{job_id}/test-executions", response_model=ListOut)
 def list_executions(
     job_id: str,
-    status: str | None = Query(default=None),
+    response: Response,
+    status: str | None = Query(default=None, description="Comma-separated test statuses"),
+    limit: int = Query(default=200, ge=1, le=1000),
     session: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ) -> ListOut:
@@ -324,13 +343,22 @@ def list_executions(
     stmt = (
         select(TestExecution)
         .where(TestExecution.job_id == job.id)
-        .order_by(TestExecution.created_at)
+        .order_by(TestExecution.created_at, TestExecution.node_id)
     )
     if status:
-        stmt = stmt.where(
-            TestExecution.status.in_([s.strip() for s in status.split(",") if s.strip()])
-        )
-    rows = session.execute(stmt).scalars().all()
+        wanted = [s.strip() for s in status.split(",") if s.strip()]
+        valid = {s.value for s in TestExecutionStatus}
+        bad = [s for s in wanted if s not in valid]
+        if bad:
+            raise Problem(400, "unsupported_filter", f"Unknown test status(es): {', '.join(bad)}.")
+        stmt = stmt.where(TestExecution.status.in_(wanted))
+    rows = session.execute(stmt.limit(limit)).scalars().all()
+    counts: dict[str, int] = {}
+    for st in session.execute(
+        select(TestExecution.status).where(TestExecution.job_id == job.id)
+    ).scalars():
+        counts[st] = counts.get(st, 0) + 1
+    response.headers["X-Test-Counts"] = ",".join(f"{k}={v}" for k, v in sorted(counts.items()))
     return ListOut(items=[TestExecutionOut.model_validate(r) for r in rows], limit=len(rows))
 
 
@@ -545,16 +573,30 @@ failed {ts.get('failed', 0)}, skipped {ts.get('skipped', 0)}, blocked {ts.get('b
 <p>Report digest {e(digest)} · generated {e(str(content.get('generated_at')))}</p></body></html>"""
 
 
-@router.get("/jobs/{job_id}/report")
+@router.get(
+    "/jobs/{job_id}/report",
+    responses={200: {"content": {"text/html": {}}}, 501: {"description": "format not built yet"}},
+)
 def get_report(
     job_id: str,
-    format: str = Query(default="json", pattern="^(json|html)$"),
+    format: str = Query(default="json", pattern="^(json|html|pdf|sarif|junit)$"),
     session: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ) -> Response:
+    """The stored report: AG-11's full report, or the deterministic partial report written when a
+    job fails or is cancelled before the report agent ran."""
     job = get_job_row(session, principal, job_id)
+    if format not in ("json", "html"):
+        raise Problem(
+            501,
+            "not_implemented",
+            f"Report format '{format}' is planned for slice 2d and is not implemented in this build.",
+            planned_slice="2d",
+        )
     report = _report(session, job.id)
     if format == "html":
+        if report.partial or "gates" not in report.content:
+            return HTMLResponse(render_basic_html(report.content))
         return HTMLResponse(_render_html(job.display_id, report.content, report.digest))
     from fastapi.responses import JSONResponse
 
@@ -565,8 +607,10 @@ def get_report(
             "kind": report.kind,
             "verdict": report.verdict,
             "generator": report.generator,
+            "partial": report.partial,
             "digest": report.digest,
             "created_at": report.created_at.isoformat().replace("+00:00", "Z"),
+            "updated_at": report.updated_at.isoformat().replace("+00:00", "Z"),
             "content": report.content,
         }
     )

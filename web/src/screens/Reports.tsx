@@ -2,7 +2,15 @@ import { Download, ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
 import { reportHtmlUrl } from "../api/client";
 import { useQualityGates, useReport } from "../api/hooks";
-import type { FindingByPriority, QualityGate, Verdict } from "../api/types";
+import type {
+  FindingByPriority,
+  PartialReportContent,
+  QualityGate,
+  ReportCheck,
+  ReportContent,
+  Verdict,
+} from "../api/types";
+import { isPartialReport } from "../api/types";
 import { SeverityChip } from "../components/SeverityChip";
 import {
   Badge,
@@ -58,7 +66,15 @@ export function ReportsScreen() {
   const report = useReport(jobId || undefined);
   const g = gates.data && Array.isArray(gates.data.gates) ? gates.data : null;
   const r = report.data ?? null;
+  const partial = r ? isPartialReport(r) : false;
+  const full: ReportContent | null = r && !partial ? (r.content as ReportContent) : null;
+  const partialContent: PartialReportContent | null =
+    r && partial ? (r.content as PartialReportContent) : null;
   const verdict = g?.verdict ?? null;
+  const checksSummary = (full?.summary?.checks ?? partialContent?.summary?.checks) as
+    | Record<string, number>
+    | undefined;
+  const reportChecks: ReportCheck[] = full?.checks ?? partialContent?.checks ?? [];
 
   return (
     <div>
@@ -110,6 +126,28 @@ export function ReportsScreen() {
       ) : (
         <div className="grid gap-5 lg:grid-cols-3">
           <div className="space-y-5 lg:col-span-2">
+            {partial ? (
+              <section
+                role="status"
+                className="card border-l-4 border-l-warn p-4"
+                aria-labelledby="partial-heading"
+              >
+                <h2 id="partial-heading" className="text-sm font-semibold text-text">
+                  Partial report — job did not complete
+                </h2>
+                <p className="mt-1 text-sm text-muted">
+                  The job ended before the QA Reporting Agent ran, so no gates were evaluated and
+                  there is no verdict. Checks and tests recorded up to that point are listed below.
+                </p>
+                {partialContent?.limitations?.length ? (
+                  <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-muted">
+                    {partialContent.limitations.map((x) => (
+                      <li key={x}>{x}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+            ) : null}
             <section
               className={`card border-l-4 p-4 ${
                 verdict === "READY"
@@ -190,23 +228,69 @@ export function ReportsScreen() {
               />
             </section>
 
-            {r ? (
+            {reportChecks.length ? (
+              <section className="card" aria-labelledby="report-checks-heading">
+                <div className="flex flex-wrap items-center gap-2 border-b border-line px-3.5 py-2.5">
+                  <h2 id="report-checks-heading" className="text-sm font-semibold text-text">
+                    Repository checks
+                  </h2>
+                  {checksSummary ? (
+                    <span className="text-xs text-muted">
+                      {Object.entries(checksSummary)
+                        .map(([k, v]) => `${k} ${v}`)
+                        .join(" · ")}
+                    </span>
+                  ) : null}
+                </div>
+                <DataTable<ReportCheck>
+                  caption="Repository checks in the report"
+                  rows={reportChecks}
+                  rowKey={(x) => x.id ?? `${x.engine}:${x.name}`}
+                  columns={[
+                    {
+                      key: "engine",
+                      header: "Check",
+                      render: (x) => (
+                        <span>
+                          <span className="mono text-muted">{x.engine}</span>{" "}
+                          <span className="text-text">{x.name}</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "outcome",
+                      header: "Outcome",
+                      render: (x) => <StatusBadge state={x.outcome} />,
+                    },
+                    {
+                      key: "message",
+                      header: "Message",
+                      render: (x) => (
+                        <span className="text-xs text-muted">{x.failure_message ?? "—"}</span>
+                      ),
+                    },
+                  ]}
+                />
+              </section>
+            ) : null}
+
+            {full ? (
               <section className="card" aria-labelledby="priority-heading">
                 <div className="flex flex-wrap items-center gap-2 border-b border-line px-3.5 py-2.5">
                   <h2 id="priority-heading" className="text-sm font-semibold text-text">
                     Findings by priority
                   </h2>
-                  {r.content.finding_summary ? (
+                  {full.finding_summary ? (
                     <span className="text-xs text-muted">
-                      {r.content.finding_summary.open ?? 0} open ·{" "}
-                      {r.content.finding_summary.excluded ?? 0} excluded from gates
+                      {full.finding_summary.open ?? 0} open · {full.finding_summary.excluded ?? 0}{" "}
+                      excluded from gates
                     </span>
                   ) : null}
                 </div>
-                {r.content.findings_by_priority?.length ? (
+                {full.findings_by_priority?.length ? (
                   <DataTable<FindingByPriority>
                     caption="Findings by priority"
-                    rows={r.content.findings_by_priority}
+                    rows={full.findings_by_priority}
                     rowKey={(x) => x.id}
                     columns={[
                       {
@@ -255,21 +339,21 @@ export function ReportsScreen() {
               </section>
             ) : null}
 
-            {r ? (
+            {full ? (
               <section className="card p-4" aria-labelledby="narrative-heading">
                 <h2 id="narrative-heading" className="text-sm font-semibold text-text">
                   Narrative
                   <Badge tone="info" className="ml-2">
-                    {r.content.narrative_source}
+                    {full.narrative_source}
                   </Badge>
                 </h2>
-                <p className="mt-2 text-sm text-text">{r.content.narrative}</p>
+                <p className="mt-2 text-sm text-text">{full.narrative}</p>
                 <h3 className="mt-4 text-xs font-semibold uppercase tracking-wide text-muted">
                   Residual risk
                 </h3>
-                {r.content.residual_risk.length ? (
+                {full.residual_risk.length ? (
                   <ul className="mt-1 list-disc space-y-0.5 pl-5 text-sm text-muted">
-                    {r.content.residual_risk.map((x) => (
+                    {full.residual_risk.map((x) => (
                       <li key={x}>{x}</li>
                     ))}
                   </ul>
@@ -285,9 +369,16 @@ export function ReportsScreen() {
               <h2 id="summary-heading" className="mb-2 text-sm font-semibold text-text">
                 Test summary
               </h2>
-              {r ? (
+              {full ? (
                 <KeyValue
-                  items={Object.entries(r.content.test_summary).map(([k, v]) => ({
+                  items={Object.entries(full.test_summary).map(([k, v]) => ({
+                    label: k.replace(/_/g, " "),
+                    value: v,
+                  }))}
+                />
+              ) : partialContent ? (
+                <KeyValue
+                  items={Object.entries(partialContent.summary?.tests ?? {}).map(([k, v]) => ({
                     label: k.replace(/_/g, " "),
                     value: v,
                   }))}
@@ -309,6 +400,7 @@ export function ReportsScreen() {
                   items={[
                     { label: "Id", value: r.id, mono: true },
                     { label: "Generator", value: r.generator },
+                    { label: "Partial", value: partial ? "yes" : "no" },
                     { label: "Digest", value: r.digest.slice(0, 16) + "…", mono: true },
                     { label: "Created", value: formatTime(r.created_at) },
                   ]}

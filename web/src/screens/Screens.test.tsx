@@ -74,7 +74,7 @@ describe("dashboard", () => {
       { match: "/jobs", body: { items: [jobFixture()], next_cursor: null, limit: 200 } },
     ]);
     renderWithProviders(<App />, { route: "/" });
-    await screen.findByText(/held: intake arrives in slice 1b/);
+    await screen.findByText(/held: waiting for the scheduler/);
     expect(screen.getAllByText("No data yet")).toHaveLength(3);
     expect(screen.queryByRole("heading", { name: "Get started in three steps" })).toBeNull();
   });

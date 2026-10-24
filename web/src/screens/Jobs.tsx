@@ -172,7 +172,17 @@ export function JobsScreen() {
                   key: "ref",
                   header: "Ref",
                   sortValue: (j) => j.ref,
-                  render: (j) => <span className="mono">{j.ref}</span>,
+                  render: (j) => (
+                    <span className="mono">
+                      {j.ref}
+                      {j.commit_sha ? (
+                        <span className="text-muted" title={j.commit_sha}>
+                          {" "}
+                          @ {j.commit_sha.slice(0, 8)}
+                        </span>
+                      ) : null}
+                    </span>
+                  ),
                 },
                 {
                   key: "profiles",

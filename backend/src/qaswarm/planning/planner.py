@@ -18,6 +18,9 @@ from typing import Any
 
 from qaswarm.agents.registry import get_agent
 
+# Task types leased by the Execution Service (phase 2), not by an agent.
+EXEC_TASK_TYPES: frozenset[str] = frozenset({"env_prepare", "check"})
+
 
 @dataclass(frozen=True)
 class PlanNode:
@@ -111,7 +114,7 @@ def validate_plan(nodes: list[PlanNode]) -> list[str]:
     if len(keys) != len(nodes):
         problems.append("duplicate node keys")
     for n in nodes:
-        if get_agent(n.task_type) is None:
+        if n.task_type not in EXEC_TASK_TYPES and get_agent(n.task_type) is None:
             problems.append(f"{n.key}: no agent registered for task type {n.task_type}")
         for d in n.depends_on + n.soft_depends_on:
             if d not in keys:

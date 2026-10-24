@@ -13,8 +13,16 @@ export function renderWithProviders(ui: ReactElement, { route = "/" } = {}) {
   );
 }
 
-export function jsonResponse(body: unknown, status = 200, contentType = "application/json") {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": contentType } });
+export function jsonResponse(
+  body: unknown,
+  status = 200,
+  contentType = "application/json",
+  extraHeaders: Record<string, string> = {},
+) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": contentType, ...extraHeaders },
+  });
 }
 
 export function emptyPage() {
@@ -35,6 +43,8 @@ export type Route = {
   body: unknown;
   status?: number;
   contentType?: string;
+  /** Extra response headers, e.g. `X-Test-Counts`. */
+  headers?: Record<string, string>;
 };
 
 /**
@@ -53,7 +63,7 @@ export function mockFetchRoutes(routes: Route[]) {
     );
     if (!r) return jsonResponse(emptyPage());
     const ct = r.contentType ?? ((r.status ?? 200) >= 400 ? "application/problem+json" : undefined);
-    return jsonResponse(r.body, r.status ?? 200, ct);
+    return jsonResponse(r.body, r.status ?? 200, ct, r.headers ?? {});
   });
   vi.stubGlobal("fetch", fn);
   return fn;
@@ -80,9 +90,23 @@ export const capabilitiesFixture = {
   auth_mode: "dev-headers",
   database: { available: true, status: "ok" },
   storage: { driver: "postgresql+psycopg", host: "localhost", port: 5432, database: "raone" },
-  execution_service: { available: false, status: "not deployed", planned_slice: "1c" },
-  evidence_store: { available: false, status: "not configured", planned_slice: "1b" },
-  model_gateway: { available: false, status: "disabled", planned_slice: "2c" },
+  phase: "2 execution engine + 3 orchestration + 5 defect intelligence",
+  llm_provider: "none",
+  execution_service: {
+    available: false,
+    status: "disabled: AQS_EXEC_TOKEN is not set",
+    planned_slice: "1c",
+  },
+  execution_enabled: false,
+  repository_code_execution_allowed: false,
+  sandbox: "process (no gVisor/Docker on this build)",
+  dev_fixture_repos: false,
+  embedded_scheduler: false,
+  embedded_exec_worker: false,
+  agent_runner_enabled: true,
+  engines: ["snapshot_integrity", "python_syntax", "secret_scan", "pytest"],
+  evidence_store: { available: true, status: "local content-addressed store", planned_slice: null },
+  model_gateway: { available: false, status: "disabled", planned_slice: null },
   test_engines: [],
   integrations: {
     github: { available: false, status: "not connected", planned_slice: "3e" },
@@ -132,12 +156,18 @@ export function jobFixture(overrides: Record<string, unknown> = {}) {
     ref: "main",
     commit_sha: null,
     profiles: { functional: "standard", security: "quick", performance: "none" },
-    held_reason: "intake arrives in slice 1b",
+    held_reason: "waiting for the scheduler: Intake & Pinning (ref → commit SHA)",
     created_at: "2026-10-21T09:00:00Z",
     updated_at: "2026-10-21T09:00:00Z",
     deadline_at: "2026-10-21T11:00:00Z",
     version: 1,
-    stages: [{ stage: "intake_and_pinning", status: "held", note: "intake arrives in slice 1b" }],
+    stages: [
+      {
+        stage: "intake_and_pinning",
+        status: "held",
+        note: "waiting for the scheduler: Intake & Pinning (ref → commit SHA)",
+      },
+    ],
     ...overrides,
   };
 }
@@ -226,6 +256,10 @@ export const planFixture = {
 function taskFixture(id: string, agent: string, type: string, stage: string, state: string) {
   return {
     id,
+    job_id: JOB_ID,
+    engine: null,
+    priority: 0,
+    lease_owner: null,
     stage,
     task_type: type,
     agent_id: agent,
@@ -317,6 +351,12 @@ export const executionsFixture = {
       tool: "raone-http-checker",
       tool_version: "1.0",
       evidence_id: "evd_01",
+      job_id: JOB_ID,
+      task_id: "tsk_02",
+      check_run_id: null,
+      node_id: "",
+      file: null,
+      commit_sha: null,
       created_at: "2026-10-21T09:01:00Z",
     },
     {
@@ -680,10 +720,14 @@ export const reportFixture = {
   job_id: JOB_ID,
   kind: "main",
   verdict: "NOT_READY",
-  generator: "AG-11 deterministic/1.0",
+  generator: "AG-11 deterministic 1.0",
+  partial: false,
   digest: "9".repeat(64),
   created_at: "2026-10-21T09:01:05Z",
+  updated_at: "2026-10-21T09:01:05Z",
   content: {
+    summary: { tasks: { succeeded: 4 }, checks: {}, tests: { passed: 1, failed: 1 } },
+    checks: [],
     verdict: "NOT_READY",
     verdict_reason: "Blocking gate(s) failed: QG-03.",
     gates: gatesFixture.gates,
@@ -726,7 +770,10 @@ export function finishedJobFixture(overrides: Record<string, unknown> = {}) {
         },
       ],
     },
-    warnings: { messages: ["Functional scenarios skipped: no execution engine in this build."] },
+    warnings: ["Functional scenarios skipped: no execution engine in this build."],
+    snapshot_sha256: null,
+    check_summary: {},
+    test_summary: { passed: 1, failed: 1, skipped: 1, blocked: 1 },
     report_available: true,
     plan_available: true,
     require_plan_approval: false,
@@ -735,7 +782,7 @@ export function finishedJobFixture(overrides: Record<string, unknown> = {}) {
       {
         stage: "intake_and_pinning",
         status: "not_run",
-        note: "Repository intake arrives in slice 1b",
+        note: "Repository could not be pinned; only supplied inputs were used",
       },
       { stage: "planning", status: "succeeded", note: "agents AG-02" },
       { stage: "environment_preparation", status: "not_planned" },
@@ -773,5 +820,320 @@ export function phase3Routes(job = finishedJobFixture()): Route[] {
     { match: "/findings/fnd_01/history", body: findingHistoryFixture },
     { match: `/jobs/${JOB_ID}`, body: job },
     { match: "/jobs", body: { items: [job], next_cursor: null, limit: 50 } },
+  ];
+}
+
+// ---- Phase 2 fixtures: Execution Service checks, worker runs, comparison, partial report ----
+
+export const checksFixture = [
+  {
+    id: "chk_01",
+    job_id: JOB_ID,
+    task_id: "tsk_10",
+    attempt_no: 1,
+    worker_run_id: "wrk_01",
+    engine_id: "env_prepare",
+    name: "Fetch pinned snapshot",
+    outcome: "passed",
+    started_at: "2026-10-21T09:00:10Z",
+    ended_at: "2026-10-21T09:00:11Z",
+    duration_ms: 900,
+    failure_message: null,
+    summary: { files: 8, bytes: 3442 },
+    tool_name: "qaswarm_exec",
+    tool_version: "0.1.0",
+    executes_repository_code: false,
+    log_evidence_id: "evd_log_01",
+    evidence_ids: ["evd_log_01"],
+  },
+  {
+    id: "chk_02",
+    job_id: JOB_ID,
+    task_id: "tsk_11",
+    attempt_no: 1,
+    worker_run_id: "wrk_02",
+    engine_id: "python_syntax",
+    name: "Python syntax",
+    outcome: "failed",
+    started_at: "2026-10-21T09:00:12Z",
+    ended_at: "2026-10-21T09:00:13Z",
+    duration_ms: 1200,
+    failure_message: "scripts/legacy_report.py:4 '(' was never closed",
+    summary: { files_checked: 7, errors: 1 },
+    tool_name: "python",
+    tool_version: "3.12.15",
+    executes_repository_code: false,
+    log_evidence_id: "evd_log_02",
+    evidence_ids: ["evd_log_02"],
+  },
+  {
+    id: "chk_03",
+    job_id: JOB_ID,
+    task_id: "tsk_12",
+    attempt_no: 1,
+    worker_run_id: "wrk_03",
+    engine_id: "pytest",
+    name: "Repository test suite",
+    outcome: "skipped",
+    started_at: "2026-10-21T09:00:14Z",
+    ended_at: "2026-10-21T09:00:14Z",
+    duration_ms: 0,
+    failure_message:
+      "Engine executes repository code and no sandbox runtime is available; refused.",
+    summary: {},
+    tool_name: "pytest",
+    tool_version: "8.3.0",
+    executes_repository_code: true,
+    log_evidence_id: null,
+    evidence_ids: [],
+  },
+];
+
+export const execEvidenceFixture = {
+  items: [
+    ...evidenceFixture.items,
+    {
+      id: "evd_log_02",
+      job_id: JOB_ID,
+      task_id: "tsk_11",
+      worker_run_id: "wrk_02",
+      kind: "log",
+      label: "python_syntax log",
+      media_type: "text/plain",
+      sha256: "1".repeat(64),
+      size_bytes: 88,
+      producer: "python 3.12.15",
+      deterministic: true,
+      redactions: 0,
+      truncated: false,
+      original_bytes: null,
+      redaction_status: "redacted",
+      content: null,
+      created_at: "2026-10-21T09:00:13Z",
+    },
+  ],
+  next_cursor: null,
+  limit: 3,
+};
+
+export const evidenceContentFixture = {
+  id: "evd_log_02",
+  media_type: "text/plain",
+  sha256: "1".repeat(64),
+  size_bytes: 88,
+  text: "scripts/legacy_report.py:4: SyntaxError: '(' was never closed",
+  truncated_inline: false,
+};
+
+export const workerRunsFixture = [
+  {
+    id: "wrk_02",
+    job_id: JOB_ID,
+    task_id: "tsk_11",
+    worker_id: "exec-host-1",
+    runtime: "subprocess",
+    isolation: "process",
+    image_digest: "none",
+    limits: { wall_clock_seconds: 1800 },
+    network_policy: "unenforced",
+    exit_code: 0,
+    outcome: "succeeded",
+    output_bytes: 88,
+    truncated: false,
+    started_at: "2026-10-21T09:00:12Z",
+    ended_at: "2026-10-21T09:00:13Z",
+    destroyed_at: "2026-10-21T09:00:13Z",
+  },
+];
+
+export const pytestExecutionsFixture = {
+  items: [
+    ...executionsFixture.items,
+    {
+      id: "tex_10",
+      job_id: JOB_ID,
+      task_id: "tsk_12",
+      check_run_id: "chk_03",
+      node_id: "tests/test_rounding.py::test_rounds_half_even",
+      file: "tests/test_rounding.py",
+      commit_sha: "4e5f10ffe9f48e3762663fccbeb2d9b40ce6f318",
+      scenario_id: null,
+      test_type: "functional",
+      name: "test_rounds_half_even",
+      provenance: "existing",
+      purpose: "baseline",
+      status: "failed",
+      duration_ms: 3,
+      message: "AssertionError: assert Decimal('0.01') == Decimal('0.00')",
+      meta: {},
+      tool: "pytest",
+      tool_version: "8.3.0",
+      evidence_id: null,
+      created_at: "2026-10-21T09:01:04Z",
+    },
+  ],
+  next_cursor: null,
+  limit: 5,
+};
+
+export const compareFixture = {
+  base: {
+    id: JOB_ID,
+    display_id: "QA-0001",
+    state: "completed_with_warnings",
+    ref: "fix-rounding",
+    commit_sha: "1f8faf4925aa000000000000000000000000abcd",
+    created_at: "2026-10-21T09:00:00Z",
+  },
+  other: {
+    id: "job_00",
+    display_id: "QA-0000",
+    state: "completed_with_warnings",
+    ref: "main",
+    commit_sha: "4e5f10ffe9f48e3762663fccbeb2d9b40ce6f318",
+    created_at: "2026-10-20T09:00:00Z",
+  },
+  same_repository: true,
+  same_commit: false,
+  checks: [
+    {
+      engine: "python_syntax",
+      name: "Python syntax",
+      base: "passed",
+      other: "failed",
+      delta: "improved",
+    },
+    {
+      engine: "snapshot_integrity",
+      name: "Snapshot",
+      base: "passed",
+      other: "passed",
+      delta: "unchanged",
+    },
+    { engine: "secret_scan", name: "Secrets", base: null, other: "failed", delta: "removed" },
+  ],
+  tests: [
+    {
+      node_id: "tests/test_rounding.py::test_rounds_half_even",
+      base: "passed",
+      other: "failed",
+      delta: "improved",
+    },
+  ],
+  check_deltas: { improved: 1, unchanged: 1, removed: 1 },
+  test_deltas: { improved: 1 },
+  test_counts: { base: { passed: 7 }, other: { passed: 5, failed: 2 } },
+};
+
+export const partialReportFixture = {
+  id: "rpt_02",
+  job_id: JOB_ID,
+  kind: "main",
+  verdict: null,
+  generator: "basic-partial",
+  partial: true,
+  digest: "8".repeat(64),
+  created_at: "2026-10-21T09:00:20Z",
+  updated_at: "2026-10-21T09:00:20Z",
+  content: {
+    schema_version: "1.0",
+    generated_at: "2026-10-21T09:00:20Z",
+    partial: true,
+    job: { id: JOB_ID, display_id: "QA-0001", state: "failed" },
+    summary: { tasks: { failed: 1, skipped: 5 }, checks: { error: 1 }, tests: {} },
+    checks: [
+      {
+        id: "chk_09",
+        engine: "env_prepare",
+        name: "Fetch pinned snapshot",
+        outcome: "error",
+        duration_ms: 40,
+        failure_message: "worker crashed (E-EXEC-003)",
+        summary: {},
+        tool: { name: "qaswarm_exec", version: "0.1.0" },
+        executes_repository_code: false,
+        evidence_ids: [],
+      },
+    ],
+    tests: [],
+    evidence: [],
+    warnings: [],
+    limitations: ["The job ended before the report agent ran; no gates were evaluated."],
+    verdict: null,
+  },
+};
+
+/** A job that pinned a commit and ran Execution Service checks (phase 2 on the merged pipeline). */
+export function pinnedJobFixture(overrides: Record<string, unknown> = {}) {
+  return finishedJobFixture({
+    commit_sha: "4e5f10ffe9f48e3762663fccbeb2d9b40ce6f318",
+    snapshot_sha256: "29dd53829f27".padEnd(64, "0"),
+    warnings: [],
+    check_summary: { passed: 1, failed: 1, skipped: 1 },
+    test_summary: { passed: 1, failed: 2, skipped: 1, blocked: 1 },
+    task_summary: { succeeded: 7 },
+    stages: [
+      { stage: "intake_and_pinning", status: "succeeded", note: "pinned 4e5f10ffe9f4", tasks: 0 },
+      { stage: "planning", status: "succeeded", note: "agents AG-02", tasks: 1 },
+      { stage: "environment_preparation", status: "succeeded", note: null, tasks: 2 },
+      { stage: "baseline_run", status: "succeeded", note: null, tasks: 1 },
+      { stage: "functional_and_api_testing", status: "succeeded", note: "agents AG-04", tasks: 2 },
+      { stage: "security_testing", status: "not_planned", note: "not in plan", tasks: 0 },
+      { stage: "performance_testing", status: "not_planned", note: "not in plan", tasks: 0 },
+      { stage: "mutation_testing", status: "not_planned", note: "not in plan", tasks: 0 },
+      { stage: "evidence_correlation_and_triage", status: "succeeded", note: null, tasks: 1 },
+      { stage: "patch_proposal", status: "not_planned", note: "not in plan", tasks: 0 },
+      { stage: "independent_verification", status: "not_planned", note: "not in plan", tasks: 0 },
+      { stage: "quality_gates_and_reporting", status: "succeeded", note: null, tasks: 1 },
+      { stage: "cleanup_and_retention", status: "succeeded", note: null, tasks: 0 },
+    ],
+    ...overrides,
+  });
+}
+
+export function execTaskFixture(id: string, type: string, engine: string | null, stage: string) {
+  return {
+    ...taskFixture(id, "", type, stage, "succeeded"),
+    agent_id: type === "check" && engine === "pytest" ? "AG-03" : null,
+    engine,
+    outputs: [],
+  };
+}
+
+/** Routes for a pinned job: phase 3 endpoints plus checks, worker runs, compare and content. */
+export function phase2Routes(job = pinnedJobFixture()): Route[] {
+  const previous = { ...job, id: "job_00", display_id: "QA-0000", ref: "main" };
+  return [
+    { match: `/jobs/${JOB_ID}/checks`, body: checksFixture },
+    { match: `/jobs/${JOB_ID}/worker-runs`, body: workerRunsFixture },
+    { match: `/jobs/${JOB_ID}/compare`, body: compareFixture },
+    { match: `/jobs/${JOB_ID}/evidence`, body: execEvidenceFixture },
+    { match: "/evidence/evd_log_02/content", body: evidenceContentFixture },
+    {
+      match: `/jobs/${JOB_ID}/test-executions`,
+      body: pytestExecutionsFixture,
+      headers: { "X-Test-Counts": "blocked=1,failed=2,passed=1,skipped=1" },
+    },
+    {
+      match: `/jobs/${JOB_ID}/tasks`,
+      body: {
+        items: [
+          execTaskFixture("tsk_10", "env_prepare", null, "environment_preparation"),
+          execTaskFixture("tsk_11", "check", "python_syntax", "functional_and_api_testing"),
+          execTaskFixture("tsk_12", "check", "pytest", "baseline_run"),
+          ...tasksFixture.items,
+        ],
+        next_cursor: null,
+        limit: 7,
+      },
+    },
+    ...phase3Routes(job).filter(
+      (r) =>
+        r.match !== "/jobs" &&
+        r.match !== `/jobs/${JOB_ID}/evidence` &&
+        r.match !== `/jobs/${JOB_ID}/tasks` &&
+        r.match !== `/jobs/${JOB_ID}/test-executions`,
+    ),
+    { match: "/jobs", body: { items: [job, previous], next_cursor: null, limit: 50 } },
   ];
 }

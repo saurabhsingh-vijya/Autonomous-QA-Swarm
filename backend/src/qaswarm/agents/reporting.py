@@ -32,6 +32,8 @@ class ReportOutput(AgentOutputModel):
     test_summary: dict[str, int]
     finding_summary: dict[str, int]
     findings_by_priority: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
     coverage: dict[str, Any]
     residual_risk: list[str]
     agents: list[dict[str, Any]]
@@ -70,6 +72,13 @@ class ReportingAgent:
         findings: list[dict[str, Any]] = list(up.get("findings", []))
         scenarios: list[dict[str, Any]] = list(up.get("scenarios", []))
         tasks: list[dict[str, Any]] = list(up.get("tasks", []))
+        check_runs: list[dict[str, Any]] = list(up.get("check_runs", []))
+        check_counts: dict[str, int] = {}
+        for c in check_runs:
+            check_counts[c["outcome"]] = check_counts.get(c["outcome"], 0) + 1
+        task_counts: dict[str, int] = {}
+        for t in tasks:
+            task_counts[t["state"]] = task_counts.get(t["state"], 0) + 1
 
         counts = {
             k: 0
@@ -199,7 +208,9 @@ class ReportingAgent:
 
         verdict, reason = _verdict(gates, hard_blocker=bool(open_conf_crit or open_conf_high_sec))
         residual = [
-            "Functional scenarios were not executed: no sandbox execution engine in this build (slice 1c).",
+            "Functional scenarios from supplied requirements were not executed: no sandbox "
+            "scenario engine in this build (slice 1c); repository test suites run through the "
+            "Execution Service's pytest engine only when the host allows code execution.",
             "Findings rest on single-run evidence; reproduction in fresh sandboxes arrives in slice 2b.",
             "Security, performance and mutation checks did not run (slices 2a, 3b, 3c).",
         ]
@@ -219,7 +230,10 @@ class ReportingAgent:
             )
         residual += [w for w in up.get("warnings", []) if w not in residual]
         narrative = (
-            f"RaOne executed {executed} API check(s) ({counts['passed']} passed, {counts['failed']} failed), "
+            f"RaOne ran {len(check_runs)} repository check(s) "
+            f"({check_counts.get('passed', 0)} passed, {check_counts.get('failed', 0)} failed, "
+            f"{check_counts.get('skipped', 0)} skipped) and "
+            f"{executed} test/API execution(s) ({counts['passed']} passed, {counts['failed']} failed), "
             f"recorded {counts['skipped']} skipped and {counts['blocked']} blocked scenario(s), and correlated "
             f"{len(findings)} finding(s). Verdict {verdict}: {reason}"
         )
@@ -253,6 +267,8 @@ class ReportingAgent:
             },
             residual_risk=residual,
             agents=tasks,
+            summary={"tasks": task_counts, "checks": check_counts, "tests": dict(counts)},
+            checks=check_runs,
             narrative=narrative,
             narrative_source="deterministic template (no LLM narrative in this build)",
         ).model_dump(mode="json")

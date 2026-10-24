@@ -68,8 +68,48 @@ export function SettingsScreen() {
                 { label: "Telemetry export", value: c.telemetry_export },
                 { label: "External AI providers", value: c.external_ai_providers },
                 { label: "Authentication", value: c.auth_mode },
+                ...(c.phase ? [{ label: "Phase", value: c.phase }] : []),
+                ...(c.llm_provider ? [{ label: "LLM provider", value: c.llm_provider }] : []),
               ]}
             />
+          </section>
+          <section className="card p-4" aria-labelledby="exec-heading">
+            <h2 id="exec-heading" className="mb-3 text-sm font-semibold text-text">
+              Execution
+            </h2>
+            <KeyValue
+              items={[
+                {
+                  label: "Execution Service",
+                  value: c.execution_enabled ? (
+                    <Badge tone="ok">enabled</Badge>
+                  ) : (
+                    <Badge tone="neutral">disabled (AQS_EXEC_TOKEN unset)</Badge>
+                  ),
+                },
+                { label: "Runtime", value: c.sandbox ?? "—" },
+                {
+                  label: "Repository code may run",
+                  value: c.repository_code_execution_allowed ? (
+                    <Badge tone="danger">yes — unsandboxed (dev only)</Badge>
+                  ) : (
+                    <Badge tone="ok">no</Badge>
+                  ),
+                },
+                { label: "Check engines", value: (c.engines ?? []).join(", ") || "—" },
+                {
+                  label: "Agent runner in API",
+                  value: c.agent_runner_enabled ? "yes" : "no",
+                },
+                { label: "Embedded scheduler", value: c.embedded_scheduler ? "yes" : "no" },
+                { label: "Embedded exec worker", value: c.embedded_exec_worker ? "yes" : "no" },
+                { label: "Dev fixture repositories", value: c.dev_fixture_repos ? "yes" : "no" },
+              ]}
+            />
+            <p className="mt-3 text-xs text-muted">
+              Without an Execution Service, jobs run their agent tasks on supplied inputs only and
+              repository checks are not planned.
+            </p>
           </section>
           <section className="card p-4" aria-labelledby="storage-heading">
             <h2 id="storage-heading" className="mb-3 text-sm font-semibold text-text">
@@ -92,7 +132,10 @@ export function SettingsScreen() {
                   label: "Evidence store",
                   value: (
                     <span className="inline-flex items-center gap-2">
-                      <Avail c={c.evidence_store} /> slice {c.evidence_store.planned_slice}
+                      <Avail c={c.evidence_store} />{" "}
+                      {c.evidence_store.planned_slice
+                        ? `slice ${c.evidence_store.planned_slice}`
+                        : c.evidence_store.status}
                     </span>
                   ),
                 },
@@ -122,7 +165,7 @@ export function SettingsScreen() {
                     available: c.test_engines.length > 0,
                     status:
                       c.test_engines.length > 0 ? c.test_engines.join(", ") : "none registered",
-                    planned_slice: "1d",
+                    planned_slice: null,
                   },
                 },
               ]}

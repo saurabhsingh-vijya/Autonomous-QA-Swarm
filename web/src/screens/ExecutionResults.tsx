@@ -1,7 +1,8 @@
 import { FileSearch } from "lucide-react";
 import { useState } from "react";
-import { useExecutions, useJobEvidence } from "../api/hooks";
+import { useChecks, useExecutions, useJobEvidence } from "../api/hooks";
 import type { EvidenceItem, TestExecution } from "../api/types";
+import { ChecksTable } from "../components/ChecksTable";
 import {
   Badge,
   Button,
@@ -33,19 +34,23 @@ export function ExecutionResultsScreen({
   const { jobs, items, jobId, job, setJobId } = useJobSelection();
   const executions = useExecutions(jobId || undefined);
   const evidence = useJobEvidence(jobId || undefined);
+  const checks = useChecks(testType === "functional" && jobId ? jobId : undefined);
   const [open, setOpen] = useState<EvidenceItem | null>(null);
 
   const rows: TestExecution[] = (
     Array.isArray(executions.data?.items) ? executions.data.items : []
-  ).filter((e) => e.test_type === testType);
-  const evidenceById = new Map(
-    (Array.isArray(evidence.data?.items) ? evidence.data.items : []).map((e) => [e.id, e]),
-  );
+  ).filter((e) => (testType === "api" ? e.test_type === "api" : e.test_type !== "api"));
+  const evidenceRows = Array.isArray(evidence.data?.items) ? evidence.data.items : [];
+  const evidenceById = new Map(evidenceRows.map((e) => [e.id, e]));
+  const checkRows = Array.isArray(checks.data) ? checks.data : [];
   const counts = rows.reduce<Record<string, number>>((acc, e) => {
     acc[e.status] = (acc[e.status] ?? 0) + 1;
     return acc;
   }, {});
   const executed = (counts.passed ?? 0) + (counts.failed ?? 0);
+  /** Per-status counts the API reports for the whole job (header `X-Test-Counts`). */
+  const apiCounts = executions.data?.counts ?? {};
+  const isPytest = (e: TestExecution) => Boolean(e.node_id);
 
   return (
     <div>
@@ -55,7 +60,7 @@ export function ExecutionResultsScreen({
         subtitle={
           testType === "api"
             ? "Read-only HTTP checks the API Testing Agent ran against a local target, with the recorded request and response as evidence. Blocked rows were refused by the local policy and never sent."
-            : "Functional scenarios derived from the requirements. No execution engine exists in this build, so every scenario is recorded as skipped: nothing here is a pass."
+            : "Repository tests run by the Execution Service's pytest engine (one row per test, with its JUnit message), plus functional scenarios derived from supplied requirements, which are recorded as skipped because no scenario engine exists. A pass is only ever a persisted pytest result."
         }
         badge={
           rows.length ? (
@@ -78,7 +83,37 @@ export function ExecutionResultsScreen({
             ))}
           </ul>
         ) : null}
+        {Object.keys(apiCounts).length ? (
+          <p className="mt-2 text-xs text-muted" aria-label="Job-wide test counts">
+            Job-wide (all test types):{" "}
+            {Object.entries(apiCounts)
+              .map(([k, v]) => `${k} ${v}`)
+              .join(" · ")}
+          </p>
+        ) : null}
       </div>
+
+      {testType === "functional" ? (
+        <section className="card mb-5" aria-labelledby="checks-heading">
+          <div className="border-b border-line px-3.5 py-2.5">
+            <h2 id="checks-heading" className="text-sm font-semibold text-text">
+              Repository checks{job ? ` for ${job.display_id}` : ""}
+            </h2>
+          </div>
+          {checks.isLoading ? (
+            <SkeletonRows label="Loading checks" />
+          ) : checks.isError ? (
+            <ErrorState error={checks.error} onRetry={() => checks.refetch()} />
+          ) : checkRows.length === 0 ? (
+            <p className="px-3.5 py-3 text-sm text-muted">
+              No check run recorded: the job was not pinned to a commit, or no Execution Service is
+              configured.
+            </p>
+          ) : (
+            <ChecksTable checks={checkRows} evidence={evidenceRows} onOpenEvidence={setOpen} />
+          )}
+        </section>
+      ) : null}
 
       <section className="card" aria-labelledby="exec-table-heading">
         <div className="border-b border-line px-3.5 py-2.5">
@@ -121,7 +156,9 @@ export function ExecutionResultsScreen({
                 render: (e) => (
                   <div>
                     <div className="font-medium text-text">{e.name}</div>
-                    <div className="mono text-2xs text-muted">{e.scenario_id ?? "—"}</div>
+                    <div className="mono text-2xs text-muted">
+                      {isPytest(e) ? e.node_id : (e.scenario_id ?? "—")}
+                    </div>
                   </div>
                 ),
               },
@@ -140,6 +177,19 @@ export function ExecutionResultsScreen({
                         <span className="mono text-xs">
                           {e.meta.expected_status ?? "—"} /{" "}
                           {e.meta.observed_status == null ? "—" : e.meta.observed_status}
+                        </span>
+                      ),
+                    },
+                  ]
+                : []),
+              ...(testType === "functional"
+                ? [
+                    {
+                      key: "file",
+                      header: "File",
+                      render: (e: TestExecution) => (
+                        <span className="mono text-xs text-muted">
+                          {e.file ?? (isPytest(e) ? "—" : "requirement scenario")}
                         </span>
                       ),
                     },
@@ -198,6 +248,18 @@ export function ExecutionResultsScreen({
                   <dt className="text-muted">Meta</dt>
                   <dd className="mono break-all">{JSON.stringify(e.meta)}</dd>
                 </div>
+                {e.commit_sha ? (
+                  <div>
+                    <dt className="text-muted">Commit</dt>
+                    <dd className="mono">{e.commit_sha}</dd>
+                  </div>
+                ) : null}
+                {e.check_run_id ? (
+                  <div>
+                    <dt className="text-muted">Check run</dt>
+                    <dd className="mono">{e.check_run_id}</dd>
+                  </div>
+                ) : null}
               </dl>
             )}
           />

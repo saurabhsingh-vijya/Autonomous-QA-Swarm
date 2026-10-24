@@ -1,1 +1,1 @@
-"""qaswarm_exec.host: implemented in slice 1c; empty in slice 1a."""
+"""Host agent: control-plane client, source fetchers and the worker loop."""

@@ -10,14 +10,18 @@ from qaswarm.api.errors import Problem
 from qaswarm.api.etag import etag_for, parse_if_match
 from qaswarm.api.pagination import clamp_limit, decode_cursor
 from qaswarm.api.schemas import (
+    CheckRunOut,
+    CompareOut,
     JobCancelOut,
     JobCancelRequest,
     JobCreate,
     JobDetailOut,
     JobOut,
     Paginated,
+    WorkerRunOut,
 )
 from qaswarm.api.services import jobs as svc
+from qaswarm.api.services import results as results_svc
 from qaswarm.config import Settings, get_settings
 from qaswarm.telemetry.logging import correlation_id_var
 
@@ -141,6 +145,34 @@ def cancel_job(
         parse_if_match(if_match, job_id),
         correlation_id_var.get(),
     )
+
+
+@router.get("/{job_id}/checks", response_model=list[CheckRunOut])
+def list_checks(
+    job_id: str,
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> list[CheckRunOut]:
+    return results_svc.list_checks(session, principal, job_id)
+
+
+@router.get("/{job_id}/worker-runs", response_model=list[WorkerRunOut])
+def list_worker_runs(
+    job_id: str,
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> list[WorkerRunOut]:
+    return results_svc.list_worker_runs(session, principal, job_id)
+
+
+@router.get("/{job_id}/compare", response_model=CompareOut)
+def compare_jobs(
+    job_id: str,
+    with_job: str = Query(alias="with", description="Job id to compare against"),
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> CompareOut:
+    return results_svc.compare_jobs(session, principal, job_id, with_job)
 
 
 @router.get(

@@ -1,7 +1,8 @@
 """Job creation (idempotent, duplicate-safe), listing, cancel and the SSE event source.
 
-Jobs are created ``created`` → ``validating`` and held there: source intake arrives in slice 1b.
-Nothing is executed and no later state is fabricated.
+Jobs are created ``created`` → ``validating`` and held for the scheduler, which runs Intake &
+Pinning, plans the combined DAG (Execution Service checks + agent tasks) and advances the job
+from its tasks. Nothing is executed here and no later state is fabricated.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from qaswarm.api.services.repositories import get_repository_row
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings
 from qaswarm.db.models import (
+    CheckRun,
     IdempotencyRecord,
     Job,
     JobPlan,
@@ -39,16 +41,17 @@ from qaswarm.db.models import (
     OutboxEvent,
     Report,
     Task,
+    TestExecution,
+    WorkerRun,
 )
 from qaswarm.db.session import session_factory
 from qaswarm.domain.enums import PIPELINE_STAGES, TERMINAL_JOB_STATES, JobState, Role
 from qaswarm.domain.ids import display_id, new_id
 from qaswarm.domain.state_machines import JobEvent, JobStateMachine
 from qaswarm.workflow.jobs import transition_job
-from qaswarm.workflow.orchestrator import Orchestrator
 from qaswarm.workflow.queue import TaskQueue
 
-HELD_REASON = "intake arrives in slice 1b"
+HELD_REASON = "waiting for the scheduler: Intake & Pinning (ref → commit SHA)"
 JOBS_ENDPOINT = "POST /api/v1/jobs"
 
 
@@ -68,76 +71,109 @@ def to_out(job: Job) -> JobOut:
     return JobOut.model_validate({**_columns(job), "links": _links(job)})
 
 
-_STAGE_RANK = {
-    "failed": 5,
-    "running": 4,
-    "leased": 4,
-    "pending": 3,
-    "retry_scheduled": 3,
-    "skipped": 2,
-    "cancelled": 2,
-    "succeeded": 1,
-}
+_TASK_FAILED = {"failed", "timed_out", "invalid_output"}
+_TASK_ACTIVE = {"leased", "running"}
+_TASK_WAITING = {"pending", "retry_scheduled", "failed_retryable"}
+_JOB_ORDER = {s.value: i for i, s in enumerate(JobState)}
+
+
+def _stage_from_tasks(tasks: list[Task]) -> tuple[str, str | None]:
+    states = [t.state for t in tasks]
+    if any(s in _TASK_ACTIVE for s in states):
+        return "running", None
+    if any(s in _TASK_WAITING for s in states):
+        return "pending", None
+    if any(s in _TASK_FAILED for s in states):
+        codes = sorted({t.last_error_code for t in tasks if t.last_error_code})
+        return "failed", ", ".join(codes) or None
+    if any(s == "cancelled" for s in states):
+        return "cancelled", None
+    if all(s == "skipped" for s in states):
+        return "skipped", "upstream task did not succeed"
+    return "succeeded", None
 
 
 def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
-    """Derive stage status from real task states; stages with no tasks are honest about why."""
+    """Derive the 13-stage timeline from real task states and the job state. Never fabricated."""
     by_stage: dict[str, list[Task]] = {}
     for t in tasks:
         by_stage.setdefault(t.stage, []).append(t)
     terminal = job.state in TERMINAL_JOB_STATES
+    past_planning = job.state in {
+        JobState.RUNNING.value,
+        JobState.ANALYZING.value,
+        JobState.REPORTING.value,
+        JobState.COMPLETED.value,
+        JobState.COMPLETED_WITH_WARNINGS.value,
+    } or bool(tasks)
     stages: list[StageProgress] = []
     for stage in PIPELINE_STAGES:
         status, note = "pending", None
         if stage == "intake_and_pinning":
-            if job.state == JobState.VALIDATING.value and job.held_reason:
-                status, note = "held", job.held_reason
+            if job.commit_sha:
+                status, note = "succeeded", f"pinned {job.commit_sha[:12]}"
             elif job.state == JobState.VALIDATING.value:
-                status = "running"
-            elif job.state == JobState.AWAITING_APPROVAL.value:
+                status, note = "held" if job.held_reason else "running", job.held_reason
+            elif terminal:
+                status, note = "failed" if job.state == JobState.FAILED.value else "not_run", None
+        elif stage == "planning":
+            if job.state == JobState.AWAITING_APPROVAL.value:
                 status, note = "awaiting_approval", job.held_reason
-            else:
+            elif stage in by_stage:
+                status, note = _stage_from_tasks(by_stage[stage])
+                note = note or "plan persisted · requirements analysis (AG-02)"
+            elif past_planning:
+                status, note = "succeeded", "combined plan (checks + agents)"
+            elif job.state == JobState.PLANNING.value:
+                status = "running"
+            elif terminal:
+                status = "not_run"
+        elif stage in by_stage:
+            status, note = _stage_from_tasks(by_stage[stage])
+            agents = sorted({t.agent_id for t in by_stage[stage] if t.agent_id})
+            if agents and not note:
+                note = "agents " + ", ".join(agents)
+        elif stage == "evidence_correlation_and_triage":
+            if job.state == JobState.ANALYZING.value:
+                status = "running"
+            elif terminal:
+                status = "not_run"
+        elif stage == "quality_gates_and_reporting":
+            if job.state == JobState.REPORTING.value:
+                status = "running"
+            elif terminal:
                 status, note = (
                     "not_run",
-                    "Repository intake arrives in slice 1b; this job used supplied inputs.",
+                    "partial report" if job.state != JobState.BLOCKED.value else None,
                 )
-        elif stage in by_stage:
-            states = [t.state for t in by_stage[stage]]
-            if any(s in ("failed", "invalid_output", "timed_out") for s in states):
-                status = "failed"
-            elif any(s in ("leased", "running") for s in states):
-                status = "running"
-            elif all(s == "succeeded" for s in states):
-                status = "succeeded"
-            elif all(s in ("succeeded", "skipped") for s in states):
-                status, note = "succeeded", "some tasks skipped"
-            elif any(s == "cancelled" for s in states):
-                status = "cancelled"
-            else:
-                status = "pending"
-            agents = sorted({t.agent_id for t in by_stage[stage] if t.agent_id})
-            note = note or ("agents " + ", ".join(agents) if agents else None)
         elif stage == "cleanup_and_retention":
-            status = "succeeded" if terminal and tasks else ("not_run" if terminal else "pending")
-            note = "no workers to destroy in this build" if terminal and tasks else None
-        elif terminal or tasks:
-            status, note = (
-                "not_planned",
-                "not part of this job's plan (no engine for this stage yet)",
-            )
-        stages.append(StageProgress(stage=stage, status=status, note=note))
+            if terminal:
+                status = "succeeded" if job.state != JobState.BLOCKED.value else "not_run"
+        elif past_planning:
+            status, note = "not_planned", "not in plan (no engine for this stage yet)"
+        elif terminal:
+            status, note = "not_run", None
+        stages.append(
+            StageProgress(stage=stage, status=status, note=note, tasks=len(by_stage.get(stage, [])))
+        )
     return stages
 
 
 def to_detail(session: Session, job: Job) -> JobDetailOut:
-    tasks = list(
-        session.execute(
-            select(Task).where(Task.job_id == job.id).order_by(Task.created_at)
-        ).scalars()
-    )
+    tasks = list(session.execute(select(Task).where(Task.job_id == job.id)).scalars())
     counts: dict[str, int] = {}
     for t in tasks:
         counts[t.state] = counts.get(t.state, 0) + 1
+    check_rows = session.execute(
+        select(CheckRun.outcome, func.count())
+        .where(CheckRun.job_id == job.id)
+        .group_by(CheckRun.outcome)
+    ).all()
+    test_rows = session.execute(
+        select(TestExecution.status, func.count())
+        .where(TestExecution.job_id == job.id)
+        .group_by(TestExecution.status)
+    ).all()
     report_available = (
         session.execute(
             select(func.count()).select_from(Report).where(Report.job_id == job.id)
@@ -154,10 +190,13 @@ def to_detail(session: Session, job: Job) -> JobDetailOut:
         {
             **_columns(job),
             "links": _links(job),
+            "warnings": list((job.warnings or {}).get("items", [])),
             "stages": _stages(job, tasks),
+            "task_summary": counts,
+            "check_summary": {str(k): int(n) for k, n in check_rows},
+            "test_summary": {str(k): int(n) for k, n in test_rows},
             "report_available": report_available,
             "plan_available": plan_available,
-            "task_summary": counts,
         }
     )
 
@@ -295,9 +334,8 @@ def create_job(
         actor_id="api",
         correlation_id=correlation_id,
     )
-    Orchestrator.from_settings(settings).admit(
-        session, job, actor_id=principal.user_id, correlation_id=correlation_id
-    )
+    job.held_reason = HELD_REASON
+    job.current_stage = "intake_and_pinning"
     if job.held_reason:
         append_event(
             session,
@@ -422,18 +460,24 @@ def cancel_job(
         details={"reason": reason},
     )
     cancelled_tasks = TaskQueue().cancel_job_tasks(session, job.id, actor=principal.user_id)
-    # No workers exist in this slice, so cleanup is confirmed immediately. Slice 1c will wait for
-    # the Execution Service to confirm worker destruction before this transition.
     job.held_reason = None
-    transition_job(
-        session,
-        job,
-        JobEvent.CLEANUP_CONFIRMED_USER,
-        actor_type="service",
-        actor_id="workflow",
-        correlation_id=correlation_id,
-        details={"cancelled_tasks": cancelled_tasks, "workers_destroyed": 0},
-    )
+    alive = session.execute(
+        select(func.count())
+        .select_from(WorkerRun)
+        .where(WorkerRun.job_id == job.id, WorkerRun.destroyed_at.is_(None))
+    ).scalar_one()
+    if alive == 0:
+        # Nothing is running anywhere: cleanup is confirmed immediately. Otherwise the scheduler
+        # confirms once the Execution Service has reported every worker run destroyed.
+        transition_job(
+            session,
+            job,
+            JobEvent.CLEANUP_CONFIRMED_USER,
+            actor_type="service",
+            actor_id="workflow",
+            correlation_id=correlation_id,
+            details={"cancelled_tasks": cancelled_tasks, "workers_destroyed": 0},
+        )
     return JobCancelOut(
         id=job.id, state=JobState(job.state), requested_by=principal.user_id, requested_at=now
     )

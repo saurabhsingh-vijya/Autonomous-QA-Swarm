@@ -97,10 +97,12 @@ export function NewJobScreen() {
           job.state === "awaiting_approval"
             ? `${job.display_id} is waiting for plan approval (HA-05).`
             : job.state === "running" || job.state === "queued"
-              ? `${job.display_id} was admitted; agents are running.`
-              : `${job.display_id} is ${job.state.replace(/_/g, " ")}${
-                  job.held_reason ? `: ${job.held_reason}` : ""
-                }.`,
+              ? `${job.display_id} was admitted; tasks are running.`
+              : job.state === "validating"
+                ? `${job.display_id} is queued for intake and planning.`
+                : `${job.display_id} is ${job.state.replace(/_/g, " ")}${
+                    job.held_reason ? `: ${job.held_reason}` : ""
+                  }.`,
       });
       navigate(`/jobs/${job.id}`);
     } catch (err) {
@@ -227,7 +229,7 @@ export function NewJobScreen() {
                     onChange={(e) => setRef(e.target.value)}
                     required
                     maxLength={255}
-                    hint="Recorded on the job. Resolution to a commit SHA arrives with repository intake (slice 1b)."
+                    hint="Resolved to an immutable commit SHA by the scheduler during Intake & Pinning (git ls-remote)."
                   />
                 </>
               ) : null}
@@ -478,6 +480,16 @@ export function NewJobScreen() {
                       {hasInputs ? (
                         <>
                           <li>
+                            The job is created in validating and queued for the scheduler: Intake &
+                            Pinning resolves the ref to a commit (git ls-remote), then the combined
+                            plan is built. Nothing runs before that.
+                          </li>
+                          <li>
+                            Repository checks (snapshot integrity, Python syntax, secret scan,
+                            pytest) are planned only when the ref is pinned and an Execution Service
+                            is configured; the scheduler records a warning otherwise.
+                          </li>
+                          <li>
                             The orchestrator builds a deterministic plan: Requirements Analysis
                             (AG-02)
                             {profiles.functional !== "none" ? ", Functional Testing (AG-03)" : ""}
@@ -487,12 +499,13 @@ export function NewJobScreen() {
                           <li>
                             {requireApproval
                               ? "The job waits for a QA Lead to approve the plan (HA-05) before any task is enqueued."
-                              : "Tasks are enqueued immediately and the local runner executes them in dependency order."}
+                              : "Tasks are enqueued once the plan is built; the agent runner and the exec host execute them in dependency order."}
                           </li>
                           <li>
-                            API checks are the only thing executed: read-only requests to localhost.
-                            Functional scenarios are recorded as skipped because no execution engine
-                            exists in this build.
+                            API checks are read-only requests to localhost. Functional scenarios
+                            from requirements are recorded as skipped (no scenario engine); the
+                            repository&apos;s own pytest suite runs only where the exec host allows
+                            code execution.
                           </li>
                           <li>
                             Outputs, executions, evidence, findings and the report are persisted and
@@ -501,12 +514,17 @@ export function NewJobScreen() {
                         </>
                       ) : (
                         <li>
-                          No inputs were supplied, so there is nothing for agents to work from. The
-                          job is created and held at Intake &amp; Pinning (repository intake arrives
-                          in slice 1b).
+                          No inputs were supplied. The job is queued for Intake &amp; Pinning; if
+                          the ref is pinned and an Execution Service is configured, only the
+                          repository checks plus the evidence and report agents run. If the
+                          repository cannot be pinned the job fails at intake instead of pretending.
                         </li>
                       )}
-                      <li>No repository code is fetched, built or run.</li>
+                      <li>
+                        The control plane never fetches, builds or runs repository code; only an
+                        Execution Service host does, and pytest only where it explicitly allows code
+                        execution.
+                      </li>
                     </ol>
                   </div>
                 </div>

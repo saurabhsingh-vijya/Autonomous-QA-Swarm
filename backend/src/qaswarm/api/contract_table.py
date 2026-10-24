@@ -67,7 +67,19 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
     ContractEndpoint(
         "POST", "/jobs/{job_id}/release-decision", "Record release decision (HA-10)", "2d"
     ),
-    ContractEndpoint("GET", "/audit-events", "Audit trail", "1d"),
+    ContractEndpoint("GET", "/audit-events", "Audit trail", "1d", True),
+)
+
+# Endpoints added beyond the v0.1 contract table in phase 2 (recorded as a deviation for review).
+ADDITIONAL: tuple[ContractEndpoint, ...] = (
+    ContractEndpoint("GET", "/jobs/{job_id}/checks", "Check runs with outcomes", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/evidence", "Evidence items of a job", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/worker-runs", "Worker runs of a job", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/compare", "Compare two runs", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}", "Evidence metadata", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}/content", "Evidence inline text", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}/download", "Evidence bytes", "2", True),
+    ContractEndpoint("GET", "/system/capabilities", "Build capabilities", "2", True),
 )
 
 

@@ -157,7 +157,7 @@ export function AddRepositoryDialog({
       open={open}
       onClose={onClose}
       title="Add repository"
-      description="Only the URL shape is checked in this slice: https, allow-listed host, owner/repo, no credentials. DNS and reachability checks arrive in slice 1b. Nothing is cloned."
+      description="The URL shape is checked now: https, allow-listed host, owner/repo, no credentials. The first job pins the ref after SSRF-safe DNS checks. Nothing is cloned on the control plane."
     >
       <form onSubmit={submit} className="space-y-4" noValidate>
         {create.error ? <ProblemAlert error={create.error} /> : null}
@@ -219,7 +219,7 @@ export function AddRepositoryDialog({
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder="main"
-          hint="Resolved from the provider in slice 1b if left empty."
+          hint="Pinned by the first job if left empty."
         />
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted">Nothing is cloned until validation passes.</span>
@@ -294,7 +294,7 @@ export function RepositoriesScreen() {
       <PageHeader
         crumbs={[{ label: orgName ?? "Organisation" }, { label: "Repositories & Projects" }]}
         title="Repositories & Projects"
-        subtitle="Register repositories by HTTPS URL. This slice checks only the URL shape; SSRF-safe validation and commit pinning arrive in slice 1b. Credentials are references only."
+        subtitle="Register repositories by HTTPS URL. The URL shape is validated now; the first job pins the ref to a commit after SSRF-safe DNS checks. Credentials are references only."
         actions={
           <>
             <Button onClick={() => setProjectDialog({ open: true, project: null })}>

@@ -137,6 +137,36 @@ export const useExecutions = (jobId: string | undefined, status?: string[]) =>
     enabled: Boolean(jobId),
   });
 
+export const useChecks = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "checks"),
+    queryFn: () => api.listChecks(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useWorkerRuns = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "worker-runs"),
+    queryFn: () => api.listWorkerRuns(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+/** Inline text of a stored evidence object (`/evidence/{id}/content`). */
+export const useEvidenceContent = (id: string | null | undefined) =>
+  useQuery({
+    queryKey: ["evidence", id ?? "", "content"],
+    queryFn: () => api.getEvidenceContent(id!),
+    enabled: Boolean(id),
+  });
+
+export const useCompare = (jobId: string | undefined, withId: string | undefined) =>
+  useQuery({
+    queryKey: ["jobs", "compare", jobId ?? "", withId ?? ""],
+    queryFn: () => api.compareJobs(jobId!, withId!),
+    enabled: Boolean(jobId && withId),
+    retry: false,
+  });
+
 export const useFindings = (jobId: string | undefined, filters: FindingFilters = {}) =>
   useQuery({
     queryKey: keys.results(jobId ?? "", `findings:${JSON.stringify(filters)}`),
@@ -212,7 +242,19 @@ export function useApprovePlan(jobId: string) {
 
 export type SseStatus = "connecting" | "live" | "closed" | "error";
 
-const EVENT_TYPES = ["job.state_changed", "task.state_changed", "heartbeat", "stream.end"];
+const EVENT_TYPES = [
+  "job.state_changed",
+  "job.held",
+  "job.pinned",
+  "job.intake_failed",
+  "task.state_changed",
+  "task.enqueued",
+  "task.retry_scheduled",
+  "task.failed",
+  "check.completed",
+  "heartbeat",
+  "stream.end",
+];
 
 export function useJobEvents(jobId: string | undefined) {
   const [events, setEvents] = useState<JobEvent[]>([]);
@@ -237,7 +279,12 @@ export function useJobEvents(jobId: string | undefined) {
           { id: e.lastEventId, type, data, receivedAt: new Date().toISOString() },
         ]);
       }
-      if (type === "job.state_changed" || type === "task.state_changed") {
+      if (
+        type === "job.state_changed" ||
+        type === "task.state_changed" ||
+        type === "check.completed" ||
+        type === "job.pinned"
+      ) {
         qc.invalidateQueries({ queryKey: keys.job(jobId) });
         qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
       }

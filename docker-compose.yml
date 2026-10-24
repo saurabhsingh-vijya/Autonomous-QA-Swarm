@@ -23,13 +23,51 @@ services:
       AQS_DEV_AUTH: "true"
       AQS_CORS_ORIGINS: '["http://localhost:5173"]'
       AQS_LOG_LEVEL: INFO
+      # The agent runner (AG-02/03/04/08/11) runs inside the API process by default.
+      AQS_RUNNER_ENABLED: "true"
+      # Execution Service token shared with exec-host; unset = repository checks are not planned.
+      AQS_EXEC_TOKEN: ${AQS_EXEC_TOKEN:-}
+      AQS_EVIDENCE_DIR: /data/evidence
     command: >
       sh -c "alembic upgrade head && python -m qaswarm.db.seed && uvicorn qaswarm.api.app:create_app --factory --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
+    volumes:
+      - evidence:/data/evidence
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Scheduler role: Intake & Pinning, combined planning, lease reaping, job state advancement.
+  scheduler:
+    build:
+      context: ./backend
+    environment:
+      AQS_DATABASE_URL: postgresql+psycopg://qaswarm:qaswarm-dev-only@postgres:5432/qaswarm
+      AQS_LOG_LEVEL: INFO
+      AQS_EXEC_TOKEN: ${AQS_EXEC_TOKEN:-}
+      AQS_EVIDENCE_DIR: /data/evidence
+    command: python -m qaswarm.workflow.scheduler
+    volumes:
+      - evidence:/data/evidence
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Execution Service host agent (phase 2). No database access: it leases tasks from the
+  # control plane over /internal/v1/exec/* with a shared token. In production this runs on
+  # separate, disposable hosts; here it is one container for local development.
+  exec-host:
+    build:
+      context: ./exec
+    environment:
+      AQS_EXEC_CONTROL_PLANE_URL: http://api:8000
+      AQS_EXEC_TOKEN: ${AQS_EXEC_TOKEN:?set AQS_EXEC_TOKEN in .env}
+      AQS_EXEC_ALLOW_UNSANDBOXED_CODE_EXECUTION: "false"
+    command: python -m qaswarm_exec --worker-id exec-host-1
+    depends_on:
+      - api
+    profiles: ["exec"]
 
   web:
     build:
@@ -41,9 +79,6 @@ services:
     depends_on:
       - api
 
-  # exec-host: the Execution Service host agent (qaswarm_exec) arrives in slice 1c.
-  # It runs on separate hosts, has no route to this database and leases tasks
-  # through a narrow control-plane endpoint. Intentionally not defined here yet.
-
 volumes:
   pgdata:
+  evidence:

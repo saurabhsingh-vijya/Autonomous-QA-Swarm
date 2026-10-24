@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Iterator
 
 import pytest
@@ -36,6 +37,7 @@ def test_settings() -> Settings:
         idempotency_ttl_hours=24,
         sse_heartbeat_seconds=1,
         runner_enabled=False,
+        evidence_dir=tempfile.mkdtemp(prefix="raone-evidence-"),
     )
 
 
