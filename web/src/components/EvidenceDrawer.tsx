@@ -29,12 +29,19 @@ export function EvidenceDrawer({
             {item.id} · {item.media_type} · {item.size_bytes} B · sha256 {item.sha256.slice(0, 16)}…
           </p>
           <p className="mt-0.5 text-xs text-slate-500">
-            {item.redactions > 0 ? `${item.redactions} redaction(s) applied · ` : "redaction: no matches · "}
+            {item.redactions > 0
+              ? `${item.redactions} redaction(s) applied · `
+              : "redaction: no matches · "}
             {item.truncated ? "truncated at the output cap · " : ""}
             {item.deterministic ? "deterministic tool output" : "agent output"}
           </p>
         </div>
-        <button type="button" className="btn-secondary" onClick={onClose} aria-label="Close evidence">
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={onClose}
+          aria-label="Close evidence"
+        >
           <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
@@ -45,7 +52,9 @@ export function EvidenceDrawer({
           content.data.text != null ? (
             <pre className="whitespace-pre-wrap break-all rounded-lg bg-slate-900 p-3 font-mono text-xs leading-5 text-slate-100">
               {content.data.text || "(empty)"}
-              {content.data.truncated_inline ? "\n… (inline preview truncated; download for the full object)" : ""}
+              {content.data.truncated_inline
+                ? "\n… (inline preview truncated; download for the full object)"
+                : ""}
             </pre>
           ) : (
             <p className="text-sm text-slate-600">Binary evidence; use the download link.</p>

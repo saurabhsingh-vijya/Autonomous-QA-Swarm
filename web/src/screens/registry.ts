@@ -84,7 +84,6 @@ export const SCREENS: ScreenDef[] = [
     group: "RESULTS",
     icon: SquareCheck,
     purpose: "Present functional test outcomes and failure detail.",
-    plannedSlice: "1d",
   },
   {
     id: "SCR-07",

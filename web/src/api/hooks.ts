@@ -91,7 +91,19 @@ export function useCancelJob(id: string) {
 
 export type SseStatus = "connecting" | "live" | "closed" | "error";
 
-const EVENT_TYPES = ["job.state_changed", "task.state_changed", "heartbeat", "stream.end"];
+const EVENT_TYPES = [
+  "job.state_changed",
+  "job.held",
+  "job.pinned",
+  "job.intake_failed",
+  "task.state_changed",
+  "task.enqueued",
+  "task.retry_scheduled",
+  "task.failed",
+  "check.completed",
+  "heartbeat",
+  "stream.end",
+];
 
 export function useJobEvents(jobId: string | undefined) {
   const [events, setEvents] = useState<JobEvent[]>([]);

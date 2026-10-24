@@ -1,6 +1,8 @@
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "./layout/AppShell";
+import { CompareRunsScreen } from "./screens/CompareRuns";
 import { DashboardScreen } from "./screens/Dashboard";
+import { FunctionalResultsScreen } from "./screens/FunctionalResults";
 import { JobDetailScreen } from "./screens/JobDetail";
 import { JobsScreen } from "./screens/Jobs";
 import { NewJobScreen } from "./screens/NewJob";
@@ -17,6 +19,8 @@ export function App() {
         <Route path="/jobs" element={<JobsScreen />} />
         <Route path="/jobs/new" element={<NewJobScreen />} />
         <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
+        <Route path="/jobs/:jobId/compare/:otherId" element={<CompareRunsScreen />} />
+        <Route path="/results/functional" element={<FunctionalResultsScreen />} />
         {SCREENS.filter((s) => s.plannedSlice).map((s) => (
           <Route key={s.id} path={s.path} element={<PlaceholderScreen screen={s} />} />
         ))}

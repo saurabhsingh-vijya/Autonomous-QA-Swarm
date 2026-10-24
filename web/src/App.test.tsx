@@ -10,6 +10,7 @@ const TITLE_BY_ID: Record<string, string> = {
   "SCR-02": "Repositories & Projects",
   "SCR-03": "New QA job",
   "SCR-04": "Live Job Execution",
+  "SCR-06": "Functional Test Results",
 };
 
 afterEach(() => vi.unstubAllGlobals());

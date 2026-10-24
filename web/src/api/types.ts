@@ -197,6 +197,8 @@ export interface Job {
 export interface JobStage {
   stage: string;
   status: string;
+  note?: string | null;
+  tasks?: number;
 }
 
 export interface JobDetail extends Job {
@@ -205,6 +207,12 @@ export interface JobDetail extends Job {
   updated_at: string;
   stages?: JobStage[];
   cancel_requested_at?: string | null;
+  // Phase 2
+  snapshot_sha256?: string | null;
+  warnings?: string[];
+  task_summary?: Record<string, number>;
+  check_summary?: Record<string, number>;
+  test_summary?: Record<string, number>;
 }
 
 export interface JobCreate {

@@ -1,7 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { api2 } from "./client.phase2";
 
-const ACTIVE = new Set(["queued", "planning", "running", "analyzing", "reporting", "cancelling", "validating"]);
+const ACTIVE = new Set([
+  "queued",
+  "planning",
+  "running",
+  "analyzing",
+  "reporting",
+  "cancelling",
+  "validating",
+]);
 
 /** Poll while the job is active; SSE invalidation keeps it fresh, polling is the safety net. */
 function refetchWhileActive(state: string | undefined) {
@@ -9,7 +17,12 @@ function refetchWhileActive(state: string | undefined) {
 }
 
 export const useCapabilities = () =>
-  useQuery({ queryKey: ["capabilities"], queryFn: api2.capabilities, staleTime: 60_000, retry: false });
+  useQuery({
+    queryKey: ["capabilities"],
+    queryFn: api2.capabilities,
+    staleTime: 60_000,
+    retry: false,
+  });
 
 export const useJobTasks = (jobId: string, state?: string) =>
   useQuery({
@@ -35,16 +48,32 @@ export const useJobTests = (jobId: string, status?: string[]) =>
   });
 
 export const useJobEvidence = (jobId: string) =>
-  useQuery({ queryKey: ["jobs", jobId, "evidence"], queryFn: () => api2.evidence(jobId), enabled: Boolean(jobId) });
+  useQuery({
+    queryKey: ["jobs", jobId, "evidence"],
+    queryFn: () => api2.evidence(jobId),
+    enabled: Boolean(jobId),
+  });
 
 export const useJobWorkerRuns = (jobId: string) =>
-  useQuery({ queryKey: ["jobs", jobId, "worker-runs"], queryFn: () => api2.workerRuns(jobId), enabled: Boolean(jobId) });
+  useQuery({
+    queryKey: ["jobs", jobId, "worker-runs"],
+    queryFn: () => api2.workerRuns(jobId),
+    enabled: Boolean(jobId),
+  });
 
 export const useEvidenceContent = (id: string | null) =>
-  useQuery({ queryKey: ["evidence", id], queryFn: () => api2.evidenceContent(id!), enabled: Boolean(id) });
+  useQuery({
+    queryKey: ["evidence", id],
+    queryFn: () => api2.evidenceContent(id!),
+    enabled: Boolean(id),
+  });
 
 export const useJobReport = (jobId: string) =>
-  useQuery({ queryKey: ["jobs", jobId, "report"], queryFn: () => api2.report(jobId), enabled: Boolean(jobId) });
+  useQuery({
+    queryKey: ["jobs", jobId, "report"],
+    queryFn: () => api2.report(jobId),
+    enabled: Boolean(jobId),
+  });
 
 export const useCompare = (jobId: string, withId: string) =>
   useQuery({

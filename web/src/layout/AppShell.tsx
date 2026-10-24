@@ -1,9 +1,26 @@
 import { AlertTriangle, Bell, Hexagon, Search } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useProjects } from "../api/hooks";
+import { useCapabilities } from "../api/hooks.phase2";
 import { NAV_GROUPS, SCREENS } from "../screens/registry";
 
 export const CONCEPT_PILL = "Concept build — no repository code executed";
+
+/** Mode pill text: driven by GET /system/capabilities; falls back to the concept text. */
+export function capabilityPill(
+  c:
+    | {
+        execution_enabled: boolean;
+        repository_code_execution_allowed: boolean;
+        sandbox: string;
+      }
+    | undefined,
+): string {
+  if (!c || !c.execution_enabled) return CONCEPT_PILL;
+  if (c.repository_code_execution_allowed)
+    return `Execution on (${c.sandbox}) — repository code runs UNSANDBOXED (dev only)`;
+  return `Execution on (${c.sandbox}) — deterministic checks only, no repository code executed`;
+}
 
 function Sidebar() {
   return (
@@ -62,6 +79,7 @@ function Sidebar() {
 }
 
 function TopBar() {
+  const caps = useCapabilities();
   const projects = useProjects();
   const first = projects.data?.items[0];
   const orgName = first?.org_name ?? (projects.isLoading ? "Loading…" : "No organisation");
@@ -95,7 +113,7 @@ function TopBar() {
         style={{ background: "#FEF3C7", borderColor: "#D97706", color: "#92400E" }}
       >
         <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-        {CONCEPT_PILL}
+        {capabilityPill(caps.data)}
       </span>
       <button
         type="button"

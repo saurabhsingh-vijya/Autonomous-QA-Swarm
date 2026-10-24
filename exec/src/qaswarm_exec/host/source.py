@@ -219,7 +219,11 @@ class FixtureSourceFetcher:
         sha = str(source.get("commit_sha", ""))
         parts = urlsplit(url)
         clean = parts.path.strip("/")
-        if parts.hostname != FIXTURE_HOST or not _FIXTURE_PATH.match(clean):
+        if (
+            parts.hostname != FIXTURE_HOST
+            or not _FIXTURE_PATH.match(clean)
+            or any(seg in {".", ".."} for seg in clean.split("/"))
+        ):
             raise FetchError("E-EXEC-003", "not a fixture URL", retryable=False)
         name = clean.split("/")[-1]  # https://fixtures.local/<owner>/<name>; owner is ignored
         if not re.fullmatch(r"[A-Za-z0-9._/@-]{1,255}", ref) or ".." in ref:

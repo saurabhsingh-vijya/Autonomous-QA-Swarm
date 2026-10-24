@@ -249,6 +249,7 @@ def submit_result(session: Session, queue: TaskQueue, task_id: str, body: Result
             error_code="E-EXEC-004",
             error_class=ErrorClass.INFRASTRUCTURE_ERROR,
         )
+        session.commit()  # the failed attempt must persist even though the request errors
         raise Problem(
             422,
             "worker_result_invalid",

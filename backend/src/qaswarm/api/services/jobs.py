@@ -146,10 +146,10 @@ def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
         elif stage == "cleanup_and_retention":
             if terminal:
                 status = "succeeded" if job.state != JobState.BLOCKED.value else "not_run"
-        elif terminal:
-            status, note = "not_run", None
         elif past_planning:
             status, note = "skipped", "not in plan"
+        elif terminal:
+            status, note = "not_run", None
         stages.append(
             StageProgress(stage=stage, status=status, note=note, tasks=len(by_stage.get(stage, [])))
         )

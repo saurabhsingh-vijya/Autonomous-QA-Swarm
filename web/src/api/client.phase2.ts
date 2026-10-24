@@ -66,7 +66,11 @@ export const api2 = {
   tests: async (jobId: string, status?: string[]): Promise<TestPage> => {
     const q = new URLSearchParams({ limit: "200" });
     if (status?.length) q.set("status", status.join(","));
-    const headers = new Headers({ Accept: "application/json", "X-Dev-User": DEV_USER, "X-Dev-Role": DEV_ROLE });
+    const headers = new Headers({
+      Accept: "application/json",
+      "X-Dev-User": DEV_USER,
+      "X-Dev-Role": DEV_ROLE,
+    });
     const res = await fetch(`${API_BASE}/jobs/${jobId}/test-executions?${q}`, { headers });
     if (!res.ok) throw new ApiError((await res.json()) as Problem);
     const page = (await res.json()) as Paginated<TestExecution>;

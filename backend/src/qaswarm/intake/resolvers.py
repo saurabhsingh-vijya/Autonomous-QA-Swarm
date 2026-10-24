@@ -177,7 +177,12 @@ _FIXTURE_PATH = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)?$")
 def fixture_name(hostname: str | None, path: str) -> str | None:
     """``https://fixtures.local/<owner>/<name>`` → ``name`` (owner is ignored); None if invalid."""
     clean = path.strip("/")
-    if hostname != FIXTURE_HOST or not _FIXTURE_PATH.match(clean):
+    segments = clean.split("/")
+    if (
+        hostname != FIXTURE_HOST
+        or not _FIXTURE_PATH.match(clean)
+        or any(seg in {".", ".."} for seg in segments)
+    ):
         return None
     return clean.split("/")[-1]
 

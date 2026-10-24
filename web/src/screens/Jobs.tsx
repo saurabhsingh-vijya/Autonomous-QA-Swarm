@@ -115,7 +115,14 @@ export function JobsScreen() {
               {
                 key: "ref",
                 header: "Ref",
-                render: (j) => <span className="font-mono text-xs">{j.ref}</span>,
+                render: (j) => (
+                  <span className="font-mono text-xs">
+                    {j.ref}
+                    {j.commit_sha ? (
+                      <span className="text-slate-400"> @ {j.commit_sha.slice(0, 8)}</span>
+                    ) : null}
+                  </span>
+                ),
               },
               { key: "profiles", header: "Profiles", render: (j) => profilesSummary(j.profiles) },
               { key: "state", header: "State", render: (j) => <StatusBadge state={j.state} /> },

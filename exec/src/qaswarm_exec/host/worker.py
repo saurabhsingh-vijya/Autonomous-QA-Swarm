@@ -132,21 +132,6 @@ class ExecWorker:
             timeout_seconds=int(limits.get("task_wall_clock_seconds", 1800)),
             output_cap_bytes=int(limits.get("output_cap_bytes", 50 * 1024 * 1024)),
         )
-        worker_run_id = self.client.create_worker_run(
-            task_id,
-            {
-                "worker_id": self.worker_id,
-                "attempt_id": task.get("attempt_id"),
-                "runtime": self.runtime.name,
-                "isolation": self.runtime.isolation,
-                "image_digest": self.image_digest,
-                "limits": {
-                    "timeout_seconds": run_limits.timeout_seconds,
-                    "output_cap_bytes": run_limits.output_cap_bytes,
-                },
-                "network_policy": self.runtime.network_policy,
-            },
-        )
         cancel = threading.Event()
         stop_hb = threading.Event()
         hb = threading.Thread(
@@ -155,7 +140,23 @@ class ExecWorker:
         hb.start()
         started = time.monotonic()
         outcome, exit_code, output_bytes, truncated = "failed", None, 0, False
+        worker_run_id: str | None = None
         try:
+            worker_run_id = self.client.create_worker_run(
+                task_id,
+                {
+                    "worker_id": self.worker_id,
+                    "attempt_id": task.get("attempt_id"),
+                    "runtime": self.runtime.name,
+                    "isolation": self.runtime.isolation,
+                    "image_digest": self.image_digest,
+                    "limits": {
+                        "timeout_seconds": run_limits.timeout_seconds,
+                        "output_cap_bytes": run_limits.output_cap_bytes,
+                    },
+                    "network_policy": self.runtime.network_policy,
+                },
+            )
             with Workspace(self.workspace_root) as ws:
                 sink = _Sink(self.client, task_id, self.worker_id, worker_run_id)
                 if task["task_type"] == "env_prepare":
@@ -206,18 +207,23 @@ class ExecWorker:
         finally:
             stop_hb.set()
             hb.join(timeout=5)
-            try:
-                self.client.destroy_worker_run(
-                    worker_run_id,
-                    {
-                        "outcome": outcome,
-                        "exit_code": exit_code,
-                        "output_bytes": output_bytes,
-                        "truncated": truncated,
-                    },
-                )
-            except ControlPlaneError:
-                log.exception("could not report worker run destroyed", extra={"task_id": task_id})
+            if worker_run_id is None:
+                log.info("task released before a worker run started", extra={"task_id": task_id})
+            else:
+                try:
+                    self.client.destroy_worker_run(
+                        worker_run_id,
+                        {
+                            "outcome": outcome,
+                            "exit_code": exit_code,
+                            "output_bytes": output_bytes,
+                            "truncated": truncated,
+                        },
+                    )
+                except ControlPlaneError:
+                    log.exception(
+                        "could not report worker run destroyed", extra={"task_id": task_id}
+                    )
             log.info(
                 "task finished",
                 extra={

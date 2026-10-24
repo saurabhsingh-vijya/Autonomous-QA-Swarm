@@ -146,7 +146,11 @@ export interface Report {
   updated_at: string;
   content: {
     job: Record<string, unknown>;
-    summary: { tasks: Record<string, number>; checks: Record<string, number>; tests: Record<string, number> };
+    summary: {
+      tasks: Record<string, number>;
+      checks: Record<string, number>;
+      tests: Record<string, number>;
+    };
     warnings: string[];
     limitations: string[];
     checks: unknown[];
