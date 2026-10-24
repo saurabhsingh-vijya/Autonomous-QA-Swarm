@@ -17,7 +17,28 @@ export const STAGES: { key: string; name: string }[] = [
   { key: "cleanup_and_retention", name: "Cleanup & Retention" },
 ];
 
-export type StageStatus = "pending" | "held" | "not_run" | "running" | "succeeded" | "failed";
+export type StageStatus =
+  | "pending"
+  | "held"
+  | "awaiting_approval"
+  | "not_run"
+  | "not_planned"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+const KNOWN: readonly StageStatus[] = [
+  "pending",
+  "held",
+  "awaiting_approval",
+  "not_run",
+  "not_planned",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+];
 
 export interface StageView {
   key: string;
@@ -32,9 +53,7 @@ export function stageViews(job: JobDetail): StageView[] {
   return STAGES.map((s) => {
     const api = byKey.get(s.key);
     const raw = api?.status ?? "pending";
-    const status: StageStatus = (
-      ["pending", "held", "not_run", "running", "succeeded", "failed"] as const
-    ).includes(raw as StageStatus)
+    const status: StageStatus = KNOWN.includes(raw as StageStatus)
       ? (raw as StageStatus)
       : "pending";
     return { key: s.key, name: s.name, status, note: api?.note ?? null };
@@ -44,8 +63,11 @@ export function stageViews(job: JobDetail): StageView[] {
 export const STAGE_STATUS_LABEL: Record<StageStatus, string> = {
   pending: "Pending",
   held: "Held",
+  awaiting_approval: "Needs approval",
   not_run: "Not run",
+  not_planned: "Not planned",
   running: "Running",
   succeeded: "Done",
   failed: "Failed",
+  cancelled: "Cancelled",
 };

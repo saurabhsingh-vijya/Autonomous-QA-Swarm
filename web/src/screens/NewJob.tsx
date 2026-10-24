@@ -1,9 +1,9 @@
-import { ArrowLeft, ArrowRight, Play } from "lucide-react";
+import { ArrowLeft, ArrowRight, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useCreateJob, useProjects, useRepositories } from "../api/hooks";
 import { problemSummary } from "../api/problem";
-import type { JobProfiles } from "../api/types";
+import type { ApiCheck, ApiCheckMethod, JobProfiles } from "../api/types";
 import { useProjectContext } from "../app/ProjectContext";
 import {
   Badge,
@@ -15,16 +15,19 @@ import {
   PageHeader,
   ProblemAlert,
   Select,
+  Textarea,
   toProblem,
   useToast,
 } from "../components";
 import { ScreenFooter } from "../layout/AppShell";
 import { profilesSummary, repoShortName } from "../lib/format";
+import { QUICK_CHECK, checkWarning, parseRequirements } from "../lib/jobInputs";
 import { screenById } from "./registry";
 
 const screen = screenById("SCR-03");
 
-const STEPS = ["Source", "Profiles", "Review"] as const;
+const STEPS = ["Source", "Profiles", "Inputs", "Review"] as const;
+const METHODS: ApiCheckMethod[] = ["GET", "HEAD", "OPTIONS"];
 
 export function NewJobScreen() {
   const navigate = useNavigate();
@@ -40,10 +43,13 @@ export function NewJobScreen() {
   const [ref, setRef] = useState("main");
   const [profiles, setProfiles] = useState<JobProfiles>({
     functional: "standard",
-    security: "quick",
+    security: "none",
     performance: "none",
   });
   const [forceNew, setForceNew] = useState(false);
+  const [requirementsText, setRequirementsText] = useState("");
+  const [checks, setChecks] = useState<ApiCheck[]>([]);
+  const [requireApproval, setRequireApproval] = useState(false);
 
   const projectItems = projects.data?.items ?? [];
   const repoItems = (allRepos.data?.items ?? []).filter(
@@ -62,6 +68,13 @@ export function NewJobScreen() {
 
   const problem = create.error ? toProblem(create.error) : null;
   const sourceValid = Boolean(repositoryId) && ref.trim().length > 0;
+  const requirements = parseRequirements(requirementsText);
+  const checksValid = checks.every((c) => c.url.trim().length >= 8);
+  const hasInputs = requirements.length > 0 || checks.length > 0;
+  const blockedChecks = checks.filter((c) => checkWarning(c)).length;
+
+  const updateCheck = (i: number, patch: Partial<ApiCheck>) =>
+    setChecks((prev) => prev.map((c, j) => (j === i ? { ...c, ...patch } : c)));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -70,12 +83,24 @@ export function NewJobScreen() {
         repository_id: repositoryId,
         ref: ref.trim(),
         profiles,
+        inputs: {
+          requirements,
+          api_checks: checks.map((c) => ({ ...c, url: c.url.trim() })),
+        },
+        require_plan_approval: requireApproval,
         force_new: forceNew,
       });
       toast({
         kind: "success",
         title: "Job created",
-        description: `${job.display_id} is held at Intake & Pinning.`,
+        description:
+          job.state === "awaiting_approval"
+            ? `${job.display_id} is waiting for plan approval (HA-05).`
+            : job.state === "running" || job.state === "queued"
+              ? `${job.display_id} was admitted; agents are running.`
+              : `${job.display_id} is ${job.state.replace(/_/g, " ")}${
+                  job.held_reason ? `: ${job.held_reason}` : ""
+                }.`,
       });
       navigate(`/jobs/${job.id}`);
     } catch (err) {
@@ -89,7 +114,7 @@ export function NewJobScreen() {
         crumbs={[{ label: "Jobs", to: "/jobs" }, { label: "New QA job" }]}
         title="New QA job"
         badge={<Badge tone="neutral">Draft</Badge>}
-        subtitle="Choose a repository and ref, pick profiles, then review exactly what will happen. In this build the job is created and held; nothing executes."
+        subtitle="Choose a repository and ref, pick profiles, supply the inputs agents work from, then review exactly what will happen. No repository code is fetched or executed."
       />
       {projects.data && projectItems.length === 0 ? (
         <EmptyState
@@ -202,7 +227,7 @@ export function NewJobScreen() {
                     onChange={(e) => setRef(e.target.value)}
                     required
                     maxLength={255}
-                    hint="Resolved to an immutable commit SHA during validating, from slice 1b."
+                    hint="Recorded on the job. Resolution to a commit SHA arrives with repository intake (slice 1b)."
                   />
                 </>
               ) : null}
@@ -219,6 +244,7 @@ export function NewJobScreen() {
                         functional: e.target.value as JobProfiles["functional"],
                       })
                     }
+                    hint="Standard plans the Functional Testing Agent; without an execution engine its scenarios are recorded as skipped, never passed."
                   >
                     <option value="none">None</option>
                     <option value="standard">Standard</option>
@@ -233,7 +259,7 @@ export function NewJobScreen() {
                         security: e.target.value as JobProfiles["security"],
                       })
                     }
-                    hint="Deep (DAST) is a Phase 4 profile and is not offered."
+                    hint="No security engine exists yet (slice 2a); the stage is marked not planned."
                   >
                     <option value="none">None</option>
                     <option value="quick">Quick</option>
@@ -249,7 +275,7 @@ export function NewJobScreen() {
                         performance: e.target.value as JobProfiles["performance"],
                       })
                     }
-                    hint="Baseline needs HA-03 once approvals exist. Load, stress, spike and soak are Phase 4."
+                    hint="No performance engine exists yet (slice 3b); the stage is marked not planned."
                   >
                     <option value="none">None</option>
                     <option value="smoke">Smoke</option>
@@ -268,6 +294,147 @@ export function NewJobScreen() {
               ) : null}
 
               {step === 2 ? (
+                <div className="space-y-5">
+                  <Textarea
+                    id="job-requirements"
+                    label="Requirements"
+                    optional
+                    rows={5}
+                    value={requirementsText}
+                    onChange={(e) => setRequirementsText(e.target.value)}
+                    placeholder={
+                      "One requirement per line, e.g.\nThe service must answer health checks"
+                    }
+                    hint={`${requirements.length} requirement${requirements.length === 1 ? "" : "s"}. The Requirements Analysis Agent turns each line into a traceable scenario (deterministic; no model is called unless a local provider is configured).`}
+                  />
+
+                  <fieldset>
+                    <legend className="label">API checks</legend>
+                    <p className="mb-2 text-xs text-muted">
+                      Read-only HTTP checks the API Testing Agent runs against a local target. Only
+                      GET, HEAD and OPTIONS to localhost or 127.0.0.1 are allowed; anything else is
+                      recorded as blocked.
+                    </p>
+                    {checks.length === 0 ? (
+                      <p className="mb-2 text-sm text-muted">No API checks yet.</p>
+                    ) : (
+                      <ol className="space-y-2" aria-label="API checks">
+                        {checks.map((c, i) => {
+                          const warn = checkWarning(c);
+                          return (
+                            <li
+                              key={i}
+                              className="grid grid-cols-1 gap-2 rounded-md border border-line bg-canvas p-2.5 md:grid-cols-[110px_1fr_110px_90px_auto]"
+                            >
+                              <Select
+                                id={`check-method-${i}`}
+                                label="Method"
+                                value={c.method}
+                                onChange={(e) =>
+                                  updateCheck(i, { method: e.target.value as ApiCheckMethod })
+                                }
+                              >
+                                {METHODS.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </Select>
+                              <Input
+                                id={`check-url-${i}`}
+                                label="URL"
+                                className="font-mono"
+                                value={c.url}
+                                onChange={(e) => updateCheck(i, { url: e.target.value })}
+                                required
+                                maxLength={2048}
+                                error={warn}
+                              />
+                              <Input
+                                id={`check-status-${i}`}
+                                label="Expect"
+                                type="number"
+                                min={100}
+                                max={599}
+                                value={c.expected_status}
+                                onChange={(e) =>
+                                  updateCheck(i, {
+                                    expected_status: Number(e.target.value) || 200,
+                                  })
+                                }
+                              />
+                              <Select
+                                id={`check-priority-${i}`}
+                                label="Priority"
+                                value={c.priority}
+                                onChange={(e) =>
+                                  updateCheck(i, {
+                                    priority: e.target.value as ApiCheck["priority"],
+                                  })
+                                }
+                              >
+                                <option value="P0">P0</option>
+                                <option value="P1">P1</option>
+                                <option value="P2">P2</option>
+                              </Select>
+                              <div className="flex items-end">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() =>
+                                    setChecks((prev) => prev.filter((_, j) => j !== i))
+                                  }
+                                  aria-label={`Remove check ${i + 1}`}
+                                >
+                                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                </Button>
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() =>
+                          setChecks((prev) => [
+                            ...prev,
+                            { method: "GET", url: "", expected_status: 200, priority: "P1" },
+                          ])
+                        }
+                      >
+                        <Plus className="h-3.5 w-3.5" aria-hidden="true" /> Add check
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setChecks((prev) => [...prev, { ...QUICK_CHECK }])}
+                      >
+                        Quick add: GET http://localhost:8000/healthz expect 200
+                      </Button>
+                    </div>
+                  </fieldset>
+
+                  <label className="flex items-start gap-2 text-sm text-text">
+                    <input
+                      type="checkbox"
+                      checked={requireApproval}
+                      onChange={(e) => setRequireApproval(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-line-strong bg-canvas accent-[rgb(var(--c-accent))]"
+                    />
+                    <span>
+                      Require plan approval before any agent runs (HA-05)
+                      <span className="block text-xs text-muted">
+                        The job waits in awaiting approval until a QA Lead approves or rejects the
+                        plan. Nothing is enqueued before that decision.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              ) : null}
+
+              {step === 3 ? (
                 <div className="space-y-4">
                   <KeyValue
                     columns={2}
@@ -283,6 +450,17 @@ export function NewJobScreen() {
                       },
                       { label: "Ref", value: ref, mono: true },
                       { label: "Profiles", value: profilesSummary(profiles) },
+                      { label: "Requirements", value: requirements.length },
+                      {
+                        label: "API checks",
+                        value: blockedChecks
+                          ? `${checks.length} (${blockedChecks} will be blocked by policy)`
+                          : checks.length,
+                      },
+                      {
+                        label: "Plan approval",
+                        value: requireApproval ? "Required (HA-05)" : "Not required",
+                      },
                       { label: "Force new", value: forceNew ? "Yes" : "No" },
                     ]}
                   />
@@ -297,11 +475,38 @@ export function NewJobScreen() {
                         If an equivalent job is active for this repository, ref and profiles, you
                         get a link to it instead (409).
                       </li>
-                      <li>
-                        The job is created, moved to validating and held at Intake & Pinning: intake
-                        arrives in slice 1b.
-                      </li>
-                      <li>No code is fetched, built or run. No approval is requested.</li>
+                      {hasInputs ? (
+                        <>
+                          <li>
+                            The orchestrator builds a deterministic plan: Requirements Analysis
+                            (AG-02)
+                            {profiles.functional !== "none" ? ", Functional Testing (AG-03)" : ""}
+                            {checks.length ? ", API Testing (AG-04)" : ""}, Evidence Analysis
+                            (AG-08) and QA Reporting (AG-11).
+                          </li>
+                          <li>
+                            {requireApproval
+                              ? "The job waits for a QA Lead to approve the plan (HA-05) before any task is enqueued."
+                              : "Tasks are enqueued immediately and the local runner executes them in dependency order."}
+                          </li>
+                          <li>
+                            API checks are the only thing executed: read-only requests to localhost.
+                            Functional scenarios are recorded as skipped because no execution engine
+                            exists in this build.
+                          </li>
+                          <li>
+                            Outputs, executions, evidence, findings and the report are persisted and
+                            shown on the job page.
+                          </li>
+                        </>
+                      ) : (
+                        <li>
+                          No inputs were supplied, so there is nothing for agents to work from. The
+                          job is created and held at Intake &amp; Pinning (repository intake arrives
+                          in slice 1b).
+                        </li>
+                      )}
+                      <li>No repository code is fetched, built or run.</li>
                     </ol>
                   </div>
                 </div>
@@ -315,11 +520,11 @@ export function NewJobScreen() {
                 >
                   <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back
                 </Button>
-                {step < 2 ? (
+                {step < STEPS.length - 1 ? (
                   <Button
                     variant="primary"
                     onClick={() => setStep((s) => s + 1)}
-                    disabled={!sourceValid}
+                    disabled={!sourceValid || (step === 2 && !checksValid)}
                   >
                     Continue <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Button>
@@ -328,7 +533,7 @@ export function NewJobScreen() {
                     type="submit"
                     variant="primary"
                     loading={create.isPending}
-                    disabled={!sourceValid}
+                    disabled={!sourceValid || !checksValid}
                   >
                     <Play className="h-4 w-4" aria-hidden="true" /> Create job
                   </Button>
@@ -340,15 +545,17 @@ export function NewJobScreen() {
           <aside className="space-y-4">
             <div className="card p-4 text-sm">
               <h2 className="font-semibold text-text">Policy summary</h2>
-              <p className="mt-1.5 text-muted">
-                Policy Engine evaluation arrives in slice 2c. Until then no approval is requested
-                and no sandbox starts; the job record and audit trail are real.
-              </p>
+              <ul className="mt-1.5 list-disc space-y-1 pl-4 text-muted">
+                <li>Deny by default: only GET, HEAD and OPTIONS to localhost or 127.0.0.1.</li>
+                <li>Cloud metadata addresses and credentials in URLs are refused.</li>
+                <li>Plan approval (HA-05) is the only human gate in this build.</li>
+              </ul>
             </div>
             <div className="card p-4 text-sm text-muted">
               <h2 className="font-semibold text-text">Local by default</h2>
               <p className="mt-1.5">
-                The request goes to the local API only. Nothing is sent to an external service.
+                The request goes to the local API only. Agents use deterministic adapters; a local
+                model is used only when a provider is configured, and the job record says which.
               </p>
             </div>
           </aside>

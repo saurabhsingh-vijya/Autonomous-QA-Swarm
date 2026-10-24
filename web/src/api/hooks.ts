@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, eventsUrl, probe } from "./client";
+import { ApiError, api, eventsUrl, probe } from "./client";
 import type {
   JobCreate,
   JobEvent,
@@ -17,8 +17,14 @@ export const keys = {
   jobs: (params: JobListParams = {}) => ["jobs", params] as const,
   job: (id: string) => ["jobs", "detail", id] as const,
   capabilities: ["system", "capabilities"] as const,
+  agents: ["system", "agents"] as const,
   probe: (path: string) => ["probe", path] as const,
+  results: (jobId: string, kind: string) => ["jobs", "results", jobId, kind] as const,
+  finding: (id: string) => ["findings", id] as const,
 };
+
+const notFound = (err: unknown) =>
+  err instanceof ApiError && (err.problem.status === 404 || err.problem.status === 501);
 
 export const useCapabilities = () =>
   useQuery({ queryKey: keys.capabilities, queryFn: api.getCapabilities, staleTime: 30_000 });
@@ -103,6 +109,80 @@ export function useCancelJob(id: string) {
   });
 }
 
+export const useAgents = () =>
+  useQuery({ queryKey: keys.agents, queryFn: api.listAgents, staleTime: 60_000 });
+
+/** Plan for a job; a 404 (no plan yet) resolves to null instead of an error. */
+export const usePlan = (jobId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "plan"),
+    queryFn: () => api.getPlan(jobId!).catch((e) => (notFound(e) ? null : Promise.reject(e))),
+    enabled: Boolean(jobId) && enabled,
+  });
+
+export const useTasks = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "tasks"),
+    queryFn: () => api.listTasks(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useExecutions = (jobId: string | undefined, status?: string[]) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", `executions:${status?.join(",") ?? "all"}`),
+    queryFn: () => api.listExecutions(jobId!, status),
+    enabled: Boolean(jobId),
+  });
+
+export const useFindings = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "findings"),
+    queryFn: () => api.listFindings(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useFindingEvidence = (findingId: string | undefined) =>
+  useQuery({
+    queryKey: [...keys.finding(findingId ?? ""), "evidence"],
+    queryFn: () => api.listFindingEvidence(findingId!),
+    enabled: Boolean(findingId),
+  });
+
+export const useJobEvidence = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "evidence"),
+    queryFn: () => api.listJobEvidence(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+export const useQualityGates = (jobId: string | undefined) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "gates"),
+    queryFn: () => api.getQualityGates(jobId!),
+    enabled: Boolean(jobId),
+  });
+
+/** Report for a job; a 404 (not generated) resolves to null. */
+export const useReport = (jobId: string | undefined, enabled = true) =>
+  useQuery({
+    queryKey: keys.results(jobId ?? "", "report"),
+    queryFn: () => api.getReport(jobId!).catch((e) => (notFound(e) ? null : Promise.reject(e))),
+    enabled: Boolean(jobId) && enabled,
+  });
+
+export function useApprovePlan(jobId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ decision, reason }: { decision: "approve" | "reject"; reason?: string }) =>
+      api.approvePlan(jobId, decision, reason),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: keys.job(jobId) });
+      qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
 export type SseStatus = "connecting" | "live" | "closed" | "error";
 
 const EVENT_TYPES = ["job.state_changed", "task.state_changed", "heartbeat", "stream.end"];
@@ -130,7 +210,10 @@ export function useJobEvents(jobId: string | undefined) {
           { id: e.lastEventId, type, data, receivedAt: new Date().toISOString() },
         ]);
       }
-      if (type === "job.state_changed") qc.invalidateQueries({ queryKey: keys.job(jobId) });
+      if (type === "job.state_changed" || type === "task.state_changed") {
+        qc.invalidateQueries({ queryKey: keys.job(jobId) });
+        qc.invalidateQueries({ queryKey: ["jobs", "results", jobId] });
+      }
       if (type === "stream.end") {
         es.close();
         setStatus("closed");

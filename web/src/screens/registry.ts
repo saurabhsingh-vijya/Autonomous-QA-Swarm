@@ -82,8 +82,6 @@ export const SCREENS: ScreenDef[] = [
     icon: Share2,
     purpose:
       "Show how agents and tasks relate in the job plan, and what each agent received, proposed and produced.",
-    plannedSlice: "2c",
-    probePath: "/jobs/{job}/plan",
   },
   {
     id: "SCR-06",
@@ -93,10 +91,6 @@ export const SCREENS: ScreenDef[] = [
     group: "Results",
     icon: SquareCheck,
     purpose: "Present functional test outcomes and failure detail.",
-    plannedSlice: "1d",
-    probePath: "/jobs/{job}/test-executions",
-    todayPath: "/jobs",
-    todayLabel: "Follow jobs",
   },
   {
     id: "SCR-07",
@@ -107,10 +101,6 @@ export const SCREENS: ScreenDef[] = [
     icon: Braces,
     purpose:
       "Show API contract and authorization test outcomes with request and response evidence.",
-    plannedSlice: "3a",
-    probePath: "/jobs/{job}/test-executions",
-    todayPath: "/jobs",
-    todayLabel: "Follow jobs",
   },
   {
     id: "SCR-08",
@@ -160,10 +150,6 @@ export const SCREENS: ScreenDef[] = [
     group: "Findings and fixes",
     icon: Bug,
     purpose: "Investigate a single finding and record triage decisions.",
-    plannedSlice: "2b",
-    probePath: "/jobs/{job}/findings",
-    todayPath: "/jobs",
-    todayLabel: "Follow jobs",
   },
   {
     id: "SCR-12",
@@ -200,10 +186,6 @@ export const SCREENS: ScreenDef[] = [
     icon: FileText,
     purpose:
       "Present gate results, residual risk and the release recommendation, and capture the human decision.",
-    plannedSlice: "2d",
-    probePath: "/jobs/{job}/quality-gates",
-    todayPath: "/jobs",
-    todayLabel: "Follow jobs",
   },
   {
     id: "SCR-15",

@@ -1,4 +1,4 @@
-// Hand-written API types mirroring backend Pydantic schemas (slice 1a).
+// Hand-written API types mirroring backend Pydantic schemas (slice 1a + phase 3).
 // openapi-typescript generation is a follow-up once the API stabilises.
 
 export type JobState =
@@ -191,6 +191,7 @@ export interface Job {
   commit_sha: string | null;
   profiles: JobProfiles;
   held_reason: string | null;
+  require_plan_approval?: boolean;
   created_at: string;
   links?: { self: string; events: string };
 }
@@ -202,6 +203,10 @@ export interface JobStage {
 }
 
 export interface JobDetail extends Job {
+  inputs?: JobInputs;
+  warnings?: { messages?: string[] };
+  report_available?: boolean;
+  plan_available?: boolean;
   deadline_at: string | null;
   version: number;
   updated_at: string;
@@ -242,6 +247,8 @@ export interface JobCreate {
   repository_id: string;
   ref: string;
   profiles: JobProfiles;
+  inputs?: JobInputs;
+  require_plan_approval?: boolean;
   force_new?: boolean;
 }
 
@@ -258,4 +265,222 @@ export interface JobEvent {
   type: string;
   data: unknown;
   receivedAt?: string;
+}
+
+// ---- Phase 3: orchestration inputs and persisted results --------------------------------
+
+export type ApiCheckMethod = "GET" | "HEAD" | "OPTIONS";
+
+export interface ApiCheck {
+  method: ApiCheckMethod;
+  url: string;
+  expected_status: number;
+  priority: "P0" | "P1" | "P2";
+  requirement_ref?: string | null;
+}
+
+export interface JobInputs {
+  requirements: string[];
+  api_checks: ApiCheck[];
+}
+
+export interface PlanNode {
+  key: string;
+  agent_id: string;
+  task_type: string;
+  stage: string;
+  depends_on: string[];
+  soft_depends_on: string[];
+  critical: boolean;
+  inputs?: Record<string, unknown>;
+}
+
+export interface Plan {
+  id: string;
+  job_id: string;
+  revision: number;
+  plan_hash: string;
+  planner: string;
+  approval_required: boolean;
+  approved_at: string | null;
+  nodes: PlanNode[];
+}
+
+export interface PlanApprovalResult {
+  job_id: string;
+  state: JobState;
+  approval_id: string;
+  decision: "approved" | "rejected";
+}
+
+export interface TaskAttempt {
+  id: string;
+  attempt_no: number;
+  lease_owner: string;
+  outcome: string;
+  error_code: string | null;
+  error_class: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export type AgentKind = "deterministic" | "llm_assisted" | "deterministic_with_llm";
+
+export interface AgentOutputRecord {
+  id: string;
+  attempt_no: number;
+  agent_id: string;
+  agent_kind: AgentKind | string;
+  adapter: string;
+  model_ref: string | null;
+  schema_name: string;
+  schema_version: string;
+  validation_status: "valid" | "failed" | string;
+  input_sha256: string;
+  output_sha256: string;
+  tokens_in: number;
+  tokens_out: number;
+  duration_ms: number;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface TaskRecord {
+  id: string;
+  stage: string;
+  task_type: string;
+  agent_id: string | null;
+  state: TaskState;
+  attempt_count: number;
+  depends_on: { tasks?: string[]; soft?: string[] };
+  inputs: Record<string, unknown>;
+  last_error_code: string | null;
+  last_error_class: string | null;
+  available_at: string;
+  state_changed_at: string;
+  created_at: string;
+  attempts: TaskAttempt[];
+  outputs: AgentOutputRecord[];
+}
+
+export interface TestExecution {
+  id: string;
+  scenario_id: string | null;
+  test_type: "api" | "functional" | string;
+  name: string;
+  provenance: string;
+  purpose: string;
+  status: TestStatus;
+  duration_ms: number;
+  message: string | null;
+  meta: {
+    method?: string;
+    url?: string;
+    expected_status?: number;
+    observed_status?: number | null;
+    [k: string]: unknown;
+  };
+  tool: string;
+  tool_version: string;
+  evidence_id: string | null;
+  created_at: string;
+}
+
+export type Confidence = "confirmed" | "probable" | "possible" | "unverified" | string;
+
+export interface Finding {
+  id: string;
+  display_id: string;
+  job_id: string;
+  category: string;
+  title: string;
+  severity: Severity;
+  status: FindingStatus;
+  confidence: Confidence;
+  dcs: number;
+  dcs_breakdown: Record<string, number>;
+  fingerprint: string;
+  location: Record<string, unknown>;
+  occurrences: number;
+  facts: { items?: string[] };
+  inferred: { items?: string[] };
+  evidence_ids: { items?: string[] };
+  test_execution_ids: { items?: string[] };
+  created_at: string;
+  version: number;
+}
+
+export interface EvidenceItem {
+  id: string;
+  job_id: string;
+  task_id: string | null;
+  kind: string;
+  media_type: string;
+  sha256: string;
+  size_bytes: number;
+  producer: string;
+  deterministic: boolean;
+  redaction_status: string;
+  content: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface QualityGate {
+  gate_id: string;
+  result: GateResult;
+  blocking: boolean;
+  measured?: Record<string, unknown>;
+  note?: string | null;
+}
+
+export interface QualityGates {
+  job_id: string;
+  display_id: string;
+  evaluated_at: string | null;
+  verdict: Verdict | null;
+  verdict_reason: string;
+  gates: QualityGate[];
+  accepted_risks: unknown[];
+  release_decision: unknown | null;
+  report_digest?: string;
+}
+
+export interface ReportContent {
+  verdict: Verdict;
+  verdict_reason: string;
+  gates: QualityGate[];
+  test_summary: Record<string, number>;
+  residual_risk: string[];
+  narrative: string;
+  narrative_source: string;
+  generated_at?: string;
+  [k: string]: unknown;
+}
+
+export interface Report {
+  id: string;
+  job_id: string;
+  kind: string;
+  verdict: Verdict;
+  generator: string;
+  digest: string;
+  created_at: string;
+  content: ReportContent;
+}
+
+export interface AgentCatalogueEntry {
+  agent_id: string;
+  name: string;
+  kind: AgentKind | string;
+  stage: string;
+  implemented: boolean;
+  adapter: string | null;
+  planned_slice: string | null;
+  task_types: string[];
+}
+
+export interface AgentRegistry {
+  llm_provider: string;
+  note: string;
+  items: AgentCatalogueEntry[];
 }

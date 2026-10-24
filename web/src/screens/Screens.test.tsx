@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import {
+  agentsFixture,
   capabilitiesFixture,
   jobFixture,
   mockFetchEmpty,
@@ -155,21 +156,23 @@ describe("not-available screens", () => {
   it("shows the planned slice returned by the API probe", async () => {
     mockFetchRoutes([
       ...baseRoutes(),
-      { match: /\/jobs\/job_0{26}\//, body: notImplemented("2d"), status: 501 },
+      { match: /\/jobs\/job_0{26}\//, body: notImplemented("2a"), status: 501 },
     ]);
-    renderWithProviders(<App />, { route: "/reports" });
+    renderWithProviders(<App />, { route: "/security" });
     await screen.findByText("Not available in this build");
-    await screen.findByText("Planned for slice 2d");
+    await screen.findByText("Planned for slice 2a");
     await screen.findByText("not_implemented");
   });
 });
 
 describe("agents", () => {
-  it("lists the static registry and states that no agents run", async () => {
-    mockFetchRoutes(baseRoutes());
+  it("lists the registry from the API and labels unimplemented agents honestly", async () => {
+    mockFetchRoutes([...baseRoutes(), { match: "/system/agents", body: agentsFixture }]);
     renderWithProviders(<App />, { route: "/agent-graph" });
     await screen.findByRole("heading", { level: 1, name: /Agent/ });
-    expect(screen.getByText("No agents run in this build")).toBeInTheDocument();
-    expect(screen.getAllByText("not running")).toHaveLength(11);
+    await screen.findByText(/LLM provider: none/);
+    expect(screen.getAllByText("not available")).toHaveLength(5);
+    expect(screen.getAllByText("idle")).toHaveLength(6);
+    expect(screen.queryByText("running")).toBeNull();
   });
 });

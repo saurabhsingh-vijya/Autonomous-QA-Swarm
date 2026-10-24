@@ -58,6 +58,15 @@ export const STATE_TONES: Record<string, Tone> = {
   advisory_failed: "amber",
   inconclusive: "slate",
   not_applicable: "grey",
+  // Stage-only statuses
+  held: "amber",
+  not_run: "slate",
+  not_planned: "grey",
+  // Finding confidence
+  confirmed: "green",
+  probable: "blue",
+  possible: "amber",
+  unverified: "grey",
   // Repository validation
   pending_validation: "amber",
   valid: "green",

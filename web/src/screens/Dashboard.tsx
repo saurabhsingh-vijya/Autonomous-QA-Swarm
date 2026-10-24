@@ -1,6 +1,13 @@
 import { AlertCircle, ArrowRight, Plus } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useCapabilities, useJobs, useRepositories } from "../api/hooks";
+import {
+  useCapabilities,
+  useExecutions,
+  useFindings,
+  useJobs,
+  useQualityGates,
+  useRepositories,
+} from "../api/hooks";
 import type { Job, JobState } from "../api/types";
 import { TERMINAL_JOB_STATES } from "../api/types";
 import { useProjectContext } from "../app/ProjectContext";
@@ -67,15 +74,71 @@ function Tile({
   );
 }
 
-function NotYet({ label, slice, detail }: { label: string; slice: string; detail: string }) {
+function NotYet({ label, detail }: { label: string; detail: string }) {
   return (
     <div className="card p-3.5">
       <div className="text-xs text-muted">{label}</div>
       <div className="mt-1 text-sm font-medium text-text">No data yet</div>
-      <div className="mt-1 text-2xs text-muted">
-        {detail} Arrives in slice {slice}.
-      </div>
+      <div className="mt-1 text-2xs text-muted">{detail}</div>
     </div>
+  );
+}
+
+const FINISHED: JobState[] = ["completed", "completed_with_warnings", "failed"];
+
+/** Outcome tiles for the newest finished job; every number is read from its persisted records. */
+function LatestOutcome({ job }: { job: Job | undefined }) {
+  const gates = useQualityGates(job?.id);
+  const executions = useExecutions(job?.id);
+  const findings = useFindings(job?.id);
+  if (!job) {
+    const detail = "No job has finished yet. Create a job with requirements or API checks.";
+    return (
+      <>
+        <NotYet label="Test executions" detail={detail} />
+        <NotYet label="Findings" detail={detail} />
+        <NotYet label="Quality gates" detail={detail} />
+      </>
+    );
+  }
+  const execs = Array.isArray(executions.data?.items) ? executions.data.items : [];
+  const executed = execs.filter((e) => e.status === "passed" || e.status === "failed").length;
+  const failed = execs.filter((e) => e.status === "failed").length;
+  const findingRows = Array.isArray(findings.data?.items) ? findings.data.items : [];
+  const verdict = gates.data?.verdict ?? null;
+  const loading = executions.isLoading || findings.isLoading || gates.isLoading;
+  return (
+    <>
+      <Tile
+        label={`Test executions · ${job.display_id}`}
+        value={executed}
+        loading={loading}
+        note={
+          execs.length
+            ? `${failed} failed, ${execs.length - executed} skipped or blocked`
+            : "Nothing executed for this job"
+        }
+        to={`/results/api?job=${job.id}`}
+      />
+      <Tile
+        label={`Findings · ${job.display_id}`}
+        value={findingRows.length}
+        loading={loading}
+        note={
+          findingRows.length
+            ? `${findingRows.filter((f) => f.confidence === "confirmed").length} confirmed`
+            : "No finding recorded"
+        }
+        to={`/defects?job=${job.id}`}
+      />
+      <Tile
+        label={`Quality gates · ${job.display_id}`}
+        value={verdict ? verdict.replace(/_/g, " ") : "No report"}
+        loading={loading}
+        note={gates.data?.verdict_reason}
+        to={`/reports?job=${job.id}`}
+      />
+    </>
   );
 }
 
@@ -88,6 +151,8 @@ export function DashboardScreen() {
   const jobItems = jobs.data?.items ?? [];
   const active = jobItems.filter((j) => !TERMINAL_JOB_STATES.includes(j.state));
   const held = jobItems.filter((j) => j.state === "validating" && j.held_reason);
+  const awaiting = jobItems.filter((j) => j.state === "awaiting_approval");
+  const latestFinished = jobItems.find((j) => FINISHED.includes(j.state));
   const sample = projects.some((p) => p.org_name?.includes("(sample org)"));
   const scope = project ? project.name : "all projects";
 
@@ -119,8 +184,8 @@ export function DashboardScreen() {
             Get started in three steps
           </h2>
           <p className="mt-1 text-sm text-muted">
-            RaOne runs entirely on this machine. Nothing is fetched or executed until later slices;
-            today you can set up projects, register repositories and create held jobs.
+            RaOne runs entirely on this machine. No repository code is fetched or executed; agents
+            work from the requirements and read-only API checks you supply with a job.
           </p>
           <ol className="mt-4 grid gap-3 md:grid-cols-3">
             {[
@@ -143,7 +208,7 @@ export function DashboardScreen() {
               {
                 n: 3,
                 title: "Create a QA job",
-                text: "The job is created and held at Intake & Pinning until slice 1b.",
+                text: "Supply requirements or API checks; a deterministic plan runs five agent roles locally.",
                 to: "/jobs/new",
                 cta: "New QA job",
                 done: false,
@@ -254,6 +319,17 @@ export function DashboardScreen() {
                 </span>
               </li>
             ) : null}
+            {awaiting.slice(0, 5).map((j) => (
+              <li key={j.id} className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden="true" />
+                <span className="min-w-0">
+                  <Link to={`/jobs/${j.id}`} className="mono link">
+                    {j.display_id}
+                  </Link>{" "}
+                  <span className="text-muted">awaiting plan approval (HA-05)</span>
+                </span>
+              </li>
+            ))}
             {held.slice(0, 5).map((j) => (
               <li key={j.id} className="flex items-start gap-2">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warn" aria-hidden="true" />
@@ -272,7 +348,7 @@ export function DashboardScreen() {
                 </Link>
               </li>
             ) : null}
-            {!dbDown && !caps.isError && held.length === 0 ? (
+            {!dbDown && !caps.isError && held.length === 0 && awaiting.length === 0 ? (
               <li className="text-muted">Nothing needs attention.</li>
             ) : null}
           </ul>
@@ -280,21 +356,7 @@ export function DashboardScreen() {
       </div>
 
       <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-        <NotYet
-          label="Test results"
-          slice="1d"
-          detail="No test has run: this build executes nothing."
-        />
-        <NotYet
-          label="Open defects"
-          slice="2b"
-          detail="Findings need reproduced evidence; none exist."
-        />
-        <NotYet
-          label="Quality gates"
-          slice="2d"
-          detail="QG-01 to QG-08 are evaluated at reporting."
-        />
+        <LatestOutcome job={latestFinished} />
       </div>
 
       <section className="card" aria-labelledby="recent-heading">
@@ -317,7 +379,7 @@ export function DashboardScreen() {
           <div className="p-4">
             <EmptyState
               title="No jobs yet"
-              description="Register a repository, then create a QA job. The job is held at Intake & Pinning; nothing runs on the control plane."
+              description="Register a repository, then create a QA job with requirements or API checks. Agents run locally against what you supply; no repository code is executed."
               action={
                 <>
                   <LinkButton to="/repositories" variant="primary">

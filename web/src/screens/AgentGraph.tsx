@@ -1,40 +1,73 @@
 import { Bot, Cpu, Lock } from "lucide-react";
-import { useState } from "react";
-import { useJobs, useProbe } from "../api/hooks";
-import { Badge, DataTable, KeyValue, PageHeader, Select } from "../components";
+import { useAgents, usePlan, useTasks } from "../api/hooks";
+import type { AgentCatalogueEntry, TaskRecord } from "../api/types";
+import {
+  Badge,
+  DataTable,
+  EmptyState,
+  ErrorState,
+  KeyValue,
+  PageHeader,
+  SkeletonRows,
+  StatusBadge,
+} from "../components";
+import { JobSelect } from "../components/JobSelect";
+import { PlanDag } from "../components/PlanDag";
 import { ScreenFooter } from "../layout/AppShell";
-import { AGENTS, AGENT_KIND_LABEL, type AgentDef } from "../lib/agents";
+import { AGENTS } from "../lib/agents";
+import { useJobSelection } from "../lib/useJobSelection";
 import { screenById } from "./registry";
 
 const screen = screenById("SCR-05");
-const PLACEHOLDER_JOB = "job_00000000000000000000000000";
 
-function KindBadge({ kind }: { kind: AgentDef["kind"] }) {
-  const Icon = kind === "llm" ? Bot : Cpu;
-  const tone = kind === "deterministic" ? "info" : kind === "llm" ? "violet" : "accent";
+const KIND_LABEL: Record<string, string> = {
+  deterministic: "Deterministic",
+  llm_assisted: "LLM-assisted (local model)",
+  deterministic_with_llm: "Deterministic, LLM optional",
+};
+
+function KindBadge({ kind }: { kind: string }) {
+  const Icon = kind === "deterministic" ? Cpu : Bot;
+  const tone = kind === "deterministic" ? "info" : kind === "llm_assisted" ? "violet" : "accent";
   return (
     <Badge tone={tone}>
       <Icon className="h-3 w-3" aria-hidden="true" />
-      {AGENT_KIND_LABEL[kind]}
+      {KIND_LABEL[kind] ?? kind}
     </Badge>
   );
 }
 
 export function AgentGraphScreen() {
-  const jobs = useJobs({ limit: 50 });
-  const [jobId, setJobId] = useState("");
-  const effective = jobId || jobs.data?.items[0]?.id || PLACEHOLDER_JOB;
-  const plan = useProbe(jobs.isLoading ? null : `/jobs/${effective}/plan`);
-  const p = plan.data;
-  const selected = jobs.data?.items.find((j) => j.id === effective);
+  const agents = useAgents();
+  const { jobs, items, jobId, job, setJobId } = useJobSelection();
+  const plan = usePlan(jobId || undefined);
+  const tasks = useTasks(jobId || undefined);
+  const catalogue: AgentCatalogueEntry[] = Array.isArray(agents.data?.items)
+    ? agents.data.items
+    : [];
+  const taskRows: TaskRecord[] = Array.isArray(tasks.data?.items) ? tasks.data.items : [];
+  const implemented = catalogue.filter((a) => a.implemented).length;
+  const provider = agents.data?.llm_provider;
+  const activeAgents = new Set(
+    taskRows.filter((t) => t.state === "leased" || t.state === "running").map((t) => t.agent_id),
+  );
+  const designById = new Map(AGENTS.map((a) => [a.id, a]));
 
   return (
     <div>
       <PageHeader
         crumbs={[{ label: "Execution" }, { label: "Agents" }]}
         title="Agent Collaboration Graph"
-        badge={<Badge tone="warn">No agents run in this build</Badge>}
-        subtitle="The eleven agents the platform defines, with their kind, stage and permission set from the design. Live handoffs, retries and the plan DAG appear only once planning exists (slice 2c) and only when those events actually happen."
+        badge={
+          agents.data ? (
+            <Badge tone={provider && provider !== "none" ? "violet" : "info"}>
+              {`LLM provider: ${provider ?? "unknown"}${
+                provider === "none" ? " (deterministic adapters only)" : ""
+              }`}
+            </Badge>
+          ) : null
+        }
+        subtitle="The agent registry as the API reports it, and the plan graph of one job coloured by its persisted task states. Nothing here is simulated: a node is only marked running or done when a task record says so."
       />
 
       <div className="mb-5 grid gap-5 lg:grid-cols-3">
@@ -42,51 +75,61 @@ export function AgentGraphScreen() {
           <h2 id="plan-heading" className="text-sm font-semibold text-text">
             Job plan
           </h2>
-          <div className="mt-3 grid gap-4 md:grid-cols-2">
-            <Select
-              id="plan-job"
-              label="Job"
-              value={jobId}
-              onChange={(e) => setJobId(e.target.value)}
-              disabled={jobs.isLoading || (jobs.data?.items.length ?? 0) === 0}
-              hint={
-                (jobs.data?.items.length ?? 0) === 0 && !jobs.isLoading
-                  ? "No jobs exist yet."
-                  : undefined
-              }
-            >
-              {(jobs.data?.items ?? []).map((j) => (
-                <option key={j.id} value={j.id}>
-                  {j.display_id} ({j.state.replace(/_/g, " ")})
-                </option>
-              ))}
-            </Select>
-            <KeyValue
-              items={[
-                { label: "Selected", value: selected?.display_id ?? "—", mono: true },
-                { label: "GET /jobs/{id}/plan", value: p ? `${p.status} ${p.error_code}` : "—" },
-                { label: "Planned slice", value: p?.planned_slice ?? "2c" },
-              ]}
-            />
+          <div className="mt-3">
+            <JobSelect items={items} value={jobId} onChange={setJobId} loading={jobs.isLoading} />
           </div>
-          <p className="mt-3 text-xs text-muted">
-            {p?.status === 501
-              ? p.detail
-              : "The plan endpoint is probed on every visit; its answer is shown verbatim."}
-          </p>
+          <div className="mt-4">
+            {!jobId ? (
+              <EmptyState
+                compact
+                title="No job to show"
+                description="Create a job with requirements or API checks to see its plan here."
+              />
+            ) : plan.isLoading || tasks.isLoading ? (
+              <SkeletonRows rows={3} label="Loading plan" />
+            ) : plan.isError ? (
+              <ErrorState error={plan.error} onRetry={() => plan.refetch()} />
+            ) : !plan.data ? (
+              <EmptyState
+                compact
+                title="This job has no plan"
+                description={
+                  job?.held_reason
+                    ? `${job.display_id} is held: ${job.held_reason}. No plan was built.`
+                    : "No plan has been persisted for this job."
+                }
+              />
+            ) : (
+              <>
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span>
+                    {plan.data.nodes.length} nodes · revision {plan.data.revision} ·{" "}
+                    {plan.data.planner}
+                  </span>
+                  <span>
+                    {taskRows.filter((t) => t.state === "succeeded").length} of {taskRows.length}{" "}
+                    tasks succeeded
+                  </span>
+                  {job ? <StatusBadge state={job.state} /> : null}
+                </div>
+                <PlanDag nodes={plan.data.nodes} tasks={taskRows} />
+              </>
+            )}
+          </div>
         </section>
         <aside className="card p-4" aria-label="Always denied">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-text">
             <Lock className="h-4 w-4 text-muted" aria-hidden="true" /> Denied to every agent
           </h2>
           <ul className="mt-2 space-y-1 text-sm text-muted">
-            <li>Access to secrets</li>
-            <li>Network egress (only the Model Gateway, when configured)</li>
+            <li>Access to secrets (evidence is redacted before storage)</li>
+            <li>Network egress beyond read-only requests to localhost</li>
             <li>Approving anything (HA-01 to HA-12 are human)</li>
-            <li>Executing code or changing a repository</li>
+            <li>Executing repository code or changing a repository</li>
           </ul>
           <p className="mt-3 text-xs text-muted">
-            External AI providers are disabled; LLM-assisted agents will use local models only.
+            {agents.data?.note ??
+              "External AI providers are disabled; LLM-assisted agents use local models only."}
           </p>
         </aside>
       </div>
@@ -95,67 +138,100 @@ export function AgentGraphScreen() {
         <div className="border-b border-line px-3.5 py-2.5">
           <h2 id="registry-heading" className="text-sm font-semibold text-text">
             Registry
-            <span className="ml-2 text-xs font-normal text-muted">
-              {AGENTS.length} agents defined, 0 running
-            </span>
+            {agents.data ? (
+              <span className="ml-2 text-xs font-normal text-muted">
+                {catalogue.length} agents defined, {implemented} implemented, {activeAgents.size}{" "}
+                running for the selected job
+              </span>
+            ) : null}
           </h2>
         </div>
-        <DataTable<AgentDef>
-          caption="Agent registry"
-          rows={AGENTS}
-          rowKey={(a) => a.id}
-          columns={[
-            {
-              key: "id",
-              header: "Agent",
-              sortValue: (a) => a.id,
-              render: (a) => (
-                <div>
-                  <span className="mono text-muted">{a.id}</span>{" "}
-                  <span className="font-medium text-text">{a.name}</span>
+        {agents.isLoading ? <SkeletonRows label="Loading agents" /> : null}
+        {agents.isError ? (
+          <ErrorState error={agents.error} onRetry={() => agents.refetch()} />
+        ) : null}
+        {agents.data ? (
+          <DataTable<AgentCatalogueEntry>
+            caption="Agent registry"
+            rows={catalogue}
+            rowKey={(a) => a.agent_id}
+            emptyLabel="The API returned no agents."
+            columns={[
+              {
+                key: "id",
+                header: "Agent",
+                sortValue: (a) => a.agent_id,
+                render: (a) => (
+                  <div>
+                    <span className="mono text-muted">{a.agent_id}</span>{" "}
+                    <span className="font-medium text-text">{a.name}</span>
+                  </div>
+                ),
+              },
+              {
+                key: "kind",
+                header: "Kind",
+                sortValue: (a) => a.kind,
+                render: (a) => <KindBadge kind={a.kind} />,
+              },
+              {
+                key: "stage",
+                header: "Stage",
+                render: (a) => <span className="text-muted">{a.stage}</span>,
+              },
+              {
+                key: "adapter",
+                header: "Adapter",
+                render: (a) =>
+                  a.implemented ? (
+                    <span className="mono text-xs">{a.adapter ?? "—"}</span>
+                  ) : (
+                    <span className="text-xs text-muted">
+                      not implemented{a.planned_slice ? ` · slice ${a.planned_slice}` : ""}
+                    </span>
+                  ),
+              },
+              {
+                key: "status",
+                header: "Status",
+                render: (a) =>
+                  activeAgents.has(a.agent_id) ? (
+                    <StatusBadge state="running" />
+                  ) : a.implemented ? (
+                    <Badge tone="neutral">idle</Badge>
+                  ) : (
+                    <Badge tone="neutral">not available</Badge>
+                  ),
+              },
+            ]}
+            renderExpanded={(a) => {
+              const d = designById.get(a.agent_id);
+              return (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="text-sm text-text">
+                    <p>{d?.purpose ?? "No design note."}</p>
+                    <p className="mono mt-2 text-xs text-muted">
+                      task types: {a.task_types.length ? a.task_types.join(", ") : "none"}
+                    </p>
+                  </div>
+                  {d ? (
+                    <KeyValue
+                      columns={1}
+                      items={[
+                        { label: "Read source snapshot", value: d.permissions.readSnapshot },
+                        { label: "Propose execution tasks", value: d.permissions.proposeTasks },
+                        { label: "Call Model Gateway", value: d.permissions.modelGateway },
+                        { label: "Read evidence", value: d.permissions.readEvidence },
+                        { label: "Write findings", value: d.permissions.writeFindings },
+                        { label: "Propose patch", value: d.permissions.proposePatch },
+                      ]}
+                    />
+                  ) : null}
                 </div>
-              ),
-            },
-            {
-              key: "kind",
-              header: "Kind",
-              sortValue: (a) => a.kind,
-              render: (a) => <KindBadge kind={a.kind} />,
-            },
-            {
-              key: "stage",
-              header: "Stage",
-              render: (a) => <span className="text-muted">{a.stage}</span>,
-            },
-            {
-              key: "slice",
-              header: "Arrives in",
-              sortValue: (a) => a.plannedSlice,
-              render: (a) => <span className="tabular-nums">slice {a.plannedSlice}</span>,
-            },
-            {
-              key: "status",
-              header: "Status",
-              render: () => <Badge tone="neutral">not running</Badge>,
-            },
-          ]}
-          renderExpanded={(a) => (
-            <div className="grid gap-4 md:grid-cols-2">
-              <p className="text-sm text-text">{a.purpose}</p>
-              <KeyValue
-                columns={1}
-                items={[
-                  { label: "Read source snapshot", value: a.permissions.readSnapshot },
-                  { label: "Propose execution tasks", value: a.permissions.proposeTasks },
-                  { label: "Call Model Gateway", value: a.permissions.modelGateway },
-                  { label: "Read evidence", value: a.permissions.readEvidence },
-                  { label: "Write findings", value: a.permissions.writeFindings },
-                  { label: "Propose patch", value: a.permissions.proposePatch },
-                ]}
-              />
-            </div>
-          )}
-        />
+              );
+            }}
+          />
+        ) : null}
       </section>
       <ScreenFooter id={screen.id} name={screen.name} />
     </div>

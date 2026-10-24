@@ -1,16 +1,25 @@
 import type {
+  AgentRegistry,
   Capabilities,
+  EvidenceItem,
+  Finding,
   Job,
   JobCreate,
   JobDetail,
   JobListParams,
   Paginated,
+  Plan,
+  PlanApprovalResult,
   Problem,
   Project,
   ProjectCreate,
   ProjectUpdate,
+  QualityGates,
+  Report,
   Repository,
   RepositoryCreate,
+  TaskRecord,
+  TestExecution,
 } from "./types";
 
 export const API_BASE = "/api/v1";
@@ -119,7 +128,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason: reason ?? null }),
     }),
+
+  // Phase 3: orchestration results, all read from persisted records.
+  getPlan: (jobId: string) => request<Plan>(`/jobs/${jobId}/plan`),
+  approvePlan: (jobId: string, decision: "approve" | "reject", reason?: string) =>
+    request<PlanApprovalResult>(`/jobs/${jobId}/plan/approval`, {
+      method: "POST",
+      body: JSON.stringify({ decision, reason: reason ?? null }),
+    }),
+  listTasks: (jobId: string) => request<Paginated<TaskRecord>>(`/jobs/${jobId}/tasks`),
+  listExecutions: (jobId: string, status?: string[]) =>
+    request<Paginated<TestExecution>>(
+      `/jobs/${jobId}/test-executions${status?.length ? `?status=${status.join(",")}` : ""}`,
+    ),
+  listFindings: (jobId: string) => request<Paginated<Finding>>(`/jobs/${jobId}/findings`),
+  getFinding: (findingId: string) => request<Finding>(`/findings/${findingId}`),
+  listFindingEvidence: (findingId: string) =>
+    request<Paginated<EvidenceItem>>(`/findings/${findingId}/evidence`),
+  listJobEvidence: (jobId: string) => request<Paginated<EvidenceItem>>(`/jobs/${jobId}/evidence`),
+  getQualityGates: (jobId: string) => request<QualityGates>(`/jobs/${jobId}/quality-gates`),
+  getReport: (jobId: string) => request<Report>(`/jobs/${jobId}/report`),
+  listAgents: () => request<AgentRegistry>("/system/agents"),
 };
+
+/** Same-origin URL of the HTML report; the dev auth travels as query parameters like SSE. */
+export function reportHtmlUrl(jobId: string): string {
+  return `${API_BASE}/jobs/${jobId}/report?format=html&dev_user=${DEV_USER}&dev_role=${encodeURIComponent(DEV_ROLE)}`;
+}
 
 /**
  * Call an endpoint that is expected to be unavailable in this build and return its problem+json

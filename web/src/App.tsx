@@ -4,17 +4,31 @@ import { ToastProvider } from "./components/ui/Toast";
 import { AppShell } from "./layout/AppShell";
 import { AgentGraphScreen } from "./screens/AgentGraph";
 import { DashboardScreen } from "./screens/Dashboard";
+import { DefectsScreen } from "./screens/Defects";
+import { ExecutionResultsScreen } from "./screens/ExecutionResults";
 import { JobDetailScreen } from "./screens/JobDetail";
 import { JobsScreen } from "./screens/Jobs";
 import { NewJobScreen } from "./screens/NewJob";
 import { NotAvailableScreen } from "./screens/NotAvailable";
+import { ReportsScreen } from "./screens/Reports";
 import { RepositoriesScreen } from "./screens/Repositories";
 import { SettingsScreen } from "./screens/Settings";
-import { SCREENS } from "./screens/registry";
+import { SCREENS, screenById } from "./screens/registry";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import { LinkButton } from "./components/ui/Button";
 
-const CUSTOM = new Set(["SCR-01", "SCR-02", "SCR-03", "SCR-04", "SCR-05", "SCR-15"]);
+const CUSTOM = new Set([
+  "SCR-01",
+  "SCR-02",
+  "SCR-03",
+  "SCR-04",
+  "SCR-05",
+  "SCR-06",
+  "SCR-07",
+  "SCR-11",
+  "SCR-14",
+  "SCR-15",
+]);
 
 export function App() {
   return (
@@ -29,6 +43,18 @@ export function App() {
               <Route path="/jobs/new" element={<NewJobScreen />} />
               <Route path="/jobs/:jobId" element={<JobDetailScreen />} />
               <Route path="/agent-graph" element={<AgentGraphScreen />} />
+              <Route
+                path="/results/functional"
+                element={
+                  <ExecutionResultsScreen screen={screenById("SCR-06")} testType="functional" />
+                }
+              />
+              <Route
+                path="/results/api"
+                element={<ExecutionResultsScreen screen={screenById("SCR-07")} testType="api" />}
+              />
+              <Route path="/defects" element={<DefectsScreen />} />
+              <Route path="/reports" element={<ReportsScreen />} />
               <Route path="/settings" element={<SettingsScreen />} />
               {SCREENS.filter((s) => !CUSTOM.has(s.id)).map((s) => (
                 <Route key={s.id} path={s.path} element={<NotAvailableScreen screen={s} />} />
