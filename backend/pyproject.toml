@@ -19,6 +19,11 @@ dependencies = [
   "jsonschema>=4.23,<5",
 ]
 
+[project.optional-dependencies]
+# The embedded dev worker (AQS_EMBEDDED_EXEC_WORKER=true) imports qaswarm_exec; a production
+# control plane does not need it (the Execution Service runs on its own hosts).
+embedded = ["qaswarm-exec"]
+
 [dependency-groups]
 dev = [
   "pytest>=9.0.3,<10",

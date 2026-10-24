@@ -5,7 +5,7 @@ UV ?= uv
 NPM ?= npm
 COMPOSE ?= docker compose
 
-.PHONY: setup up down logs migrate migration seed dev dev-api dev-web lint typecheck test test-unit test-integration check fmt build
+.PHONY: setup up down logs migrate migration seed dev dev-api dev-api-reload dev-web scheduler exec-host lint typecheck test test-unit test-integration check fmt build audit migrate-roundtrip
 
 setup:
 	cd backend && $(UV) sync --all-groups
@@ -31,7 +31,16 @@ seed:
 	cd backend && $(UV) run python -m qaswarm.db.seed
 
 dev-api:
+	cd backend && $(UV) run python -m qaswarm.api.serve --port 8000
+
+dev-api-reload:
 	cd backend && $(UV) run uvicorn qaswarm.api.app:create_app --factory --reload --port 8000
+
+scheduler:
+	cd backend && $(UV) run python -m qaswarm.workflow.scheduler
+
+exec-host:
+	cd backend && $(UV) run python -m qaswarm_exec
 
 dev-web:
 	cd web && $(NPM) run dev
@@ -44,7 +53,7 @@ lint:
 	cd web && $(NPM) run lint && $(NPM) run format:check
 
 typecheck:
-	cd backend && $(UV) run mypy
+	cd backend && $(UV) run python -m mypy
 	cd web && $(NPM) run typecheck
 
 test-unit:
@@ -61,6 +70,13 @@ build:
 	cd web && $(NPM) run build
 
 check: lint typecheck test build
+
+audit:
+	cd backend && $(UV) run --with pip-audit python -m pip_audit --skip-editable
+	cd web && $(NPM) audit
+
+migrate-roundtrip:
+	cd backend && $(UV) run alembic upgrade head && $(UV) run alembic downgrade base && $(UV) run alembic upgrade head
 
 fmt:
 	cd backend && $(UV) run ruff check --fix . && $(UV) run ruff format .

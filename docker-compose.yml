@@ -17,14 +17,27 @@ services:
 
   api:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       AQS_DATABASE_URL: postgresql+psycopg://qaswarm:qaswarm-dev-only@postgres:5432/qaswarm
       AQS_DEV_AUTH: "true"
       AQS_CORS_ORIGINS: '["http://localhost:5173"]'
       AQS_LOG_LEVEL: INFO
+      # Local demo: scheduler and one Execution Service worker run inside the API container.
+      # The worker runs checks in a plain subprocess (NOT a sandbox); pytest stays refused
+      # unless AQS_EXEC_ALLOW_UNSANDBOXED_CODE_EXECUTION=true is added here.
+      AQS_EXEC_TOKEN: ${AQS_EXEC_TOKEN:?set AQS_EXEC_TOKEN in .env (any long random string)}
+      AQS_EMBEDDED_SCHEDULER: "true"
+      AQS_EMBEDDED_EXEC_WORKER: "true"
+      AQS_DEV_FIXTURE_REPOS: "true"
+      AQS_FIXTURES_DIR: /app/fixtures
+      AQS_EVIDENCE_DIR: /data/evidence
+    volumes:
+      - evidence:/data/evidence
+      - ./exec/fixtures:/app/fixtures:ro
     command: >
-      sh -c "alembic upgrade head && python -m qaswarm.db.seed && uvicorn qaswarm.api.app:create_app --factory --host 0.0.0.0 --port 8000"
+      sh -c "alembic upgrade head && python -m qaswarm.db.seed && python -m qaswarm.api.serve --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
     depends_on:
@@ -41,9 +54,10 @@ services:
     depends_on:
       - api
 
-  # exec-host: the Execution Service host agent (qaswarm_exec) arrives in slice 1c.
-  # It runs on separate hosts, has no route to this database and leases tasks
-  # through a narrow control-plane endpoint. Intentionally not defined here yet.
+  # A separate exec-host service (qaswarm_exec on its own host, no database route) is the
+  # production shape; it is not defined here because this build has no sandbox runtime yet
+  # (slice 1c). The embedded worker above is for the local demo only.
 
 volumes:
   pgdata:
+  evidence:
