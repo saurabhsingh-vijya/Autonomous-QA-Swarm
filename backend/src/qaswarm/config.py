@@ -52,6 +52,82 @@ class Settings(BaseSettings):
     embedded_exec_worker: bool = False
     exec_control_plane_url: str = "http://127.0.0.1:8000"
     exec_allow_unsandboxed_code_execution: bool = False
+    # Deployment environment label; anything other than "dev" / "test" makes the dev conveniences
+    # above show up as warnings (they are never silently refused, so a demo still boots).
+    environment: str = "dev"
+
+    @property
+    def is_dev(self) -> bool:
+        return self.environment.lower() in {"dev", "development", "local", "test"}
+
+    def startup_warnings(self) -> list[str]:
+        """Human-readable warnings about incomplete or unsafe configuration (phase 6).
+
+        Logged once at startup and exposed in ``GET /system/capabilities`` so operators and the UI
+        can see what this deployment can and cannot be trusted with.
+        """
+        w: list[str] = []
+        if self.dev_auth:
+            w.append(
+                "AQS_DEV_AUTH=true: anyone who can reach the API can pick a user and a role via "
+                "X-Dev-User / X-Dev-Role. Local development only; OIDC arrives in slice 3e."
+            )
+        else:
+            w.append(
+                "AQS_DEV_AUTH=false and no OIDC provider in this build: every /api/v1 call returns "
+                "401. Set AQS_DEV_AUTH=true for local development."
+            )
+        if "qaswarm-dev-only" in self.database_url:
+            w.append("The database URL uses the sample password 'qaswarm-dev-only'.")
+        if not self.exec_token:
+            w.append(
+                "AQS_EXEC_TOKEN is not set: the Execution Service API answers 503 and no task will "
+                "ever run."
+            )
+        elif len(self.exec_token) < 16:
+            w.append("AQS_EXEC_TOKEN is shorter than 16 characters; use a long random secret.")
+        if self.exec_allow_unsandboxed_code_execution:
+            w.append(
+                "AQS_EXEC_ALLOW_UNSANDBOXED_CODE_EXECUTION=true: repository test suites run in a "
+                "plain subprocess on the worker host. This is NOT a sandbox (SEC-003/SEC-004)."
+            )
+        if self.embedded_exec_worker:
+            w.append(
+                "AQS_EMBEDDED_EXEC_WORKER=true: the Execution Service runs inside the API process "
+                "and shares its host, network and file system. Local development only."
+            )
+        if self.embedded_scheduler:
+            w.append("AQS_EMBEDDED_SCHEDULER=true: scheduler runs inside the API process.")
+        if self.dev_fixture_repos:
+            w.append(
+                "AQS_DEV_FIXTURE_REPOS=true: https://fixtures.local/<name> URLs are served from "
+                f"the local directory {self.fixtures_dir!r}. Dev-only, labelled as such."
+            )
+        if not self.intake_dns_check:
+            w.append("AQS_INTAKE_DNS_CHECK=false: private-address rejection (SEC-002) is off.")
+        if "*" in self.cors_origins:
+            w.append("AQS_CORS_ORIGINS contains '*'.")
+        if not self.is_dev:
+            unsafe = [
+                flag
+                for flag, on in (
+                    ("AQS_DEV_AUTH", self.dev_auth),
+                    ("AQS_DEV_FIXTURE_REPOS", self.dev_fixture_repos),
+                    ("AQS_EMBEDDED_EXEC_WORKER", self.embedded_exec_worker),
+                    (
+                        "AQS_EXEC_ALLOW_UNSANDBOXED_CODE_EXECUTION",
+                        self.exec_allow_unsandboxed_code_execution,
+                    ),
+                )
+                if on
+            ]
+            if unsafe:
+                w.append(
+                    f"AQS_ENVIRONMENT={self.environment!r} but development flags are on: "
+                    + ", ".join(unsafe)
+                    + ". This deployment must not be exposed to untrusted users."
+                )
+        return w
 
 
 @lru_cache

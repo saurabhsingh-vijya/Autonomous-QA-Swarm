@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings, get_settings
-from qaswarm.db.models import OutboxEvent, Task, TaskAttempt
+from qaswarm.db.models import OutboxEvent, Task, TaskAttempt, WorkerRun
 from qaswarm.domain.enums import ErrorClass, RetryClass, TaskAttemptOutcome, TaskState
 from qaswarm.domain.ids import new_id
 from qaswarm.domain.state_machines import TaskEvent, TaskStateMachine
@@ -498,6 +498,63 @@ class TaskQueue:
             self._schedule_retry_or_fail(session, task, actor="reaper")
             reaped.append(task.id)
         return reaped
+
+    def reap_orphaned_worker_runs(self, session: Session) -> list[str]:
+        """Close worker runs whose worker evidently died (phase 6, FR-011 cleanup guarantee).
+
+        A healthy worker reports ``destroyed`` itself within milliseconds of finishing. A run is
+        presumed dead when it is still open and its task attempt has not heartbeated for longer
+        than the lease TTL (or, for runs without an attempt id, the run itself is older than the
+        TTL and its task is no longer leased or running). Without this, a crashed worker would keep
+        a ``cancelling`` job from ever reaching ``cancelled``.
+        """
+        now = _now()
+        cutoff = now - timedelta(seconds=self.settings.lease_ttl_seconds)
+        rows = (
+            session.execute(
+                select(WorkerRun, TaskAttempt.last_heartbeat_at, Task.state)
+                .join(Task, Task.id == WorkerRun.task_id)
+                .outerjoin(TaskAttempt, TaskAttempt.id == WorkerRun.attempt_id)
+                .where(WorkerRun.destroyed_at.is_(None))
+                .with_for_update(of=WorkerRun, skip_locked=True)
+            )
+            .tuples()
+            .all()
+        )
+        presumed_dead: list[str] = []
+        for run, heartbeat, task_state in rows:
+            # Outer join: runs created without an attempt id have no heartbeat row.
+            last_heartbeat: datetime | None = heartbeat
+            if last_heartbeat is not None:
+                stale = last_heartbeat < cutoff
+            else:
+                stale = run.started_at < cutoff and task_state not in (
+                    TaskState.LEASED.value,
+                    TaskState.RUNNING.value,
+                )
+            if not stale:
+                continue
+            run.ended_at = run.ended_at or now
+            run.destroyed_at = now
+            run.outcome = "presumed_dead"
+            append_event(
+                session,
+                org_id=run.org_id,
+                actor_type="service",
+                actor_id="reaper",
+                action="worker_run.destroyed",
+                subject_type="worker_run",
+                subject_id=run.id,
+                job_id=run.job_id,
+                details={
+                    "outcome": "presumed_dead",
+                    "reason": "no heartbeat within the lease TTL; worker presumed gone",
+                    "task_id": run.task_id,
+                    "worker_id": run.worker_id,
+                },
+            )
+            presumed_dead.append(run.id)
+        return presumed_dead
 
     def cancel_job_tasks(self, session: Session, job_id: str, actor: str) -> int:
         tasks = (

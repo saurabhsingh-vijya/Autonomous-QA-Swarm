@@ -342,6 +342,11 @@ class CapabilitiesOut(BaseModel):
     embedded_scheduler: bool
     embedded_exec_worker: bool
     engines: list[str]
+    environment: str = "dev"
+    # Startup configuration warnings (phase 6): dev auth on, fixture repos, unsandboxed execution…
+    warnings: list[str] = Field(default_factory=list)
+    # Endpoints that return 501 in this build, with their planned slice.
+    not_implemented: list[dict[str, str]] = Field(default_factory=list)
 
 
 class JobCancelRequest(StrictModel):

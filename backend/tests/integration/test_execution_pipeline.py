@@ -486,3 +486,152 @@ def test_job_deadline_times_out_running_jobs(client: TestClient, settings: Setti
     run_until_idle(Scheduler(settings))
     final = client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()
     assert final["state"] == "timed_out" and final["task_summary"] == {"cancelled": 4}
+
+
+# ------------------------------------------------------------- phase 6 hardening
+def test_dead_worker_on_cancelling_job_is_presumed_dead_and_cancel_confirms(
+    client: TestClient, settings: Settings
+) -> None:
+    """A worker that never reports ``destroyed`` must not block cancellation forever (FR-011)."""
+    from datetime import UTC, datetime, timedelta
+
+    from qaswarm.db.models import TaskAttempt
+
+    repo = _repo(client)
+    job = _job(client, repo["id"])
+    run_until_idle(Scheduler(settings))
+    cp = ControlPlaneClient(client, TOKEN)
+    leased = cp.lease("w-dead", ["env_prepare"])[0]
+    run_id = cp.create_worker_run(
+        leased["task_id"],
+        {
+            "worker_id": "w-dead",
+            "attempt_id": leased["attempt_id"],
+            "runtime": "subprocess",
+            "isolation": "process",
+            "image_digest": "sha256:" + "c" * 32,
+        },
+    )
+    assert client.post(f"/api/v1/jobs/{job['id']}/cancel", headers=LEAD).status_code == 202
+    run_until_idle(Scheduler(settings))
+    assert client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()["state"] == "cancelling"
+    # The worker vanishes: simulate time passing beyond the lease TTL without a heartbeat.
+    with session_scope() as s:
+        attempt = s.execute(
+            select(TaskAttempt).where(TaskAttempt.id == leased["attempt_id"])
+        ).scalar_one()
+        attempt.last_heartbeat_at = datetime.now(UTC) - timedelta(
+            seconds=settings.lease_ttl_seconds + 5
+        )
+    run_until_idle(Scheduler(settings))
+    final = client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()
+    assert final["state"] == "cancelled"
+    with session_scope() as s:
+        run = s.execute(select(WorkerRun).where(WorkerRun.id == run_id)).scalar_one()
+        assert run.destroyed_at is not None and run.outcome == "presumed_dead"
+    runs = client.get(f"/api/v1/jobs/{job['id']}/worker-runs", headers=LEAD).json()
+    assert runs[0]["outcome"] == "presumed_dead"
+    # A worker that finishes late finds its run already closed and nothing changes.
+    cp.destroy_worker_run(run_id, {"outcome": "succeeded"})
+    with session_scope() as s:
+        assert (
+            s.execute(select(WorkerRun.outcome).where(WorkerRun.id == run_id)).scalar_one()
+            == "presumed_dead"
+        )
+
+
+def test_healthy_recent_worker_run_is_not_presumed_dead(
+    client: TestClient, settings: Settings
+) -> None:
+    repo = _repo(client)
+    job = _job(client, repo["id"])
+    run_until_idle(Scheduler(settings))
+    cp = ControlPlaneClient(client, TOKEN)
+    leased = cp.lease("w-ok", ["env_prepare"])[0]
+    cp.create_worker_run(
+        leased["task_id"],
+        {
+            "worker_id": "w-ok",
+            "attempt_id": leased["attempt_id"],
+            "runtime": "subprocess",
+            "isolation": "process",
+            "image_digest": "sha256:" + "d" * 32,
+        },
+    )
+    client.post(f"/api/v1/jobs/{job['id']}/cancel", headers=LEAD)
+    run_until_idle(Scheduler(settings))
+    assert client.get(f"/api/v1/jobs/{job['id']}", headers=LEAD).json()["state"] == "cancelling"
+    with session_scope() as s:
+        assert (
+            s.execute(select(WorkerRun.destroyed_at).where(WorkerRun.task_id == leased["task_id"]))
+            .scalars()
+            .one()
+            is None
+        )
+
+
+def test_double_result_submission_for_one_attempt_is_rejected(
+    client: TestClient, settings: Settings, tmp_path: Path
+) -> None:
+    repo = _repo(client)
+    job = _job(client, repo["id"])
+    run_until_idle(Scheduler(settings))
+    worker = _worker(client, settings, tmp_path, allow=False, worker_id="w-twice")
+    leased = worker.client.lease("w-twice", ["env_prepare"])[0]
+    # Build a real payload through the worker, then submit it twice by hand.
+    from qaswarm_exec.host.worker import _Sink
+    from qaswarm_exec.runtime.base import Workspace
+
+    run_id = worker.client.create_worker_run(
+        leased["task_id"],
+        {
+            "worker_id": "w-twice",
+            "attempt_id": leased["attempt_id"],
+            "runtime": "subprocess",
+            "isolation": "process",
+            "image_digest": worker.image_digest,
+        },
+    )
+    with Workspace(tmp_path / "ws2") as ws:
+        payload = worker._env_prepare(
+            leased, ws.src, _Sink(worker.client, leased["task_id"], "w-twice", run_id), run_id
+        )
+    first = worker.client.submit_result(leased["task_id"], payload)
+    assert first["state"] == "succeeded"
+    with pytest.raises(LeaseLostError):
+        worker.client.submit_result(leased["task_id"], payload)
+    with session_scope() as s:
+        t = s.execute(select(Task).where(Task.id == leased["task_id"])).scalar_one()
+        assert t.state == "succeeded" and t.attempt_count == 1
+    checks = client.get(f"/api/v1/jobs/{job['id']}/checks", headers=LEAD).json()
+    assert len(checks) == 1  # the second submission persisted nothing
+
+
+def test_idempotent_replay_and_key_reuse(client: TestClient) -> None:
+    repo = _repo(client)
+    key = uuid.uuid4().hex
+    body = {"repository_id": repo["id"], "ref": "main"}
+    first = client.post("/api/v1/jobs", json=body, headers={**LEAD, "Idempotency-Key": key})
+    second = client.post("/api/v1/jobs", json=body, headers={**LEAD, "Idempotency-Key": key})
+    assert first.status_code == 202 and second.status_code == 202
+    assert second.headers["Idempotent-Replayed"] == "true"
+    assert second.json()["id"] == first.json()["id"]
+    reused = client.post(
+        "/api/v1/jobs",
+        json={**body, "ref": "fix-rounding"},
+        headers={**LEAD, "Idempotency-Key": key},
+    )
+    assert reused.status_code == 422 and reused.json()["error_code"] == "idempotency_key_reused"
+    assert client.get("/api/v1/jobs", headers=LEAD).json()["items"].__len__() == 1
+
+
+def test_capabilities_expose_warnings_and_501_surface(client: TestClient) -> None:
+    caps = client.get("/api/v1/system/capabilities", headers=VIEWER).json()
+    assert caps["execution_enabled"] is True and caps["dev_fixture_repos"] is True
+    assert any("AQS_DEV_AUTH=true" in w for w in caps["warnings"])
+    assert any("AQS_DEV_FIXTURE_REPOS=true" in w for w in caps["warnings"])
+    paths = {e["path"] for e in caps["not_implemented"]}
+    assert "/api/v1/jobs/{job_id}/quality-gates" in paths
+    for e in caps["not_implemented"]:
+        r = client.request(e["method"], e["path"].replace("{", "x").replace("}", ""), headers=LEAD)
+        assert r.status_code == 501, e
