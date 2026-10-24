@@ -31,7 +31,16 @@ from qaswarm.api.schemas import (
 from qaswarm.api.services.repositories import get_repository_row
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings
-from qaswarm.db.models import IdempotencyRecord, Job, Organization, OutboxEvent, Task
+from qaswarm.db.models import (
+    CheckRun,
+    IdempotencyRecord,
+    Job,
+    Organization,
+    OutboxEvent,
+    Task,
+    TestExecution,
+    WorkerRun,
+)
 from qaswarm.db.session import session_factory
 from qaswarm.domain.enums import PIPELINE_STAGES, TERMINAL_JOB_STATES, JobState, Role
 from qaswarm.domain.ids import display_id, new_id
@@ -39,7 +48,7 @@ from qaswarm.domain.state_machines import JobEvent, JobStateMachine
 from qaswarm.workflow.jobs import transition_job
 from qaswarm.workflow.queue import TaskQueue
 
-HELD_REASON = "intake arrives in slice 1b"
+HELD_REASON = "waiting for the scheduler: Intake & Pinning (ref → commit SHA)"
 JOBS_ENDPOINT = "POST /api/v1/jobs"
 
 
@@ -59,26 +68,119 @@ def to_out(job: Job) -> JobOut:
     return JobOut.model_validate({**_columns(job), "links": _links(job)})
 
 
-def _stages(job: Job) -> list[StageProgress]:
+_TASK_FAILED = {"failed", "timed_out", "invalid_output"}
+_TASK_ACTIVE = {"leased", "running"}
+_TASK_WAITING = {"pending", "retry_scheduled", "failed_retryable"}
+_JOB_ORDER = {s.value: i for i, s in enumerate(JobState)}
+
+
+def _stage_from_tasks(tasks: list[Task]) -> tuple[str, str | None]:
+    states = [t.state for t in tasks]
+    if any(s in _TASK_ACTIVE for s in states):
+        return "running", None
+    if any(s in _TASK_WAITING for s in states):
+        return "pending", None
+    if any(s in _TASK_FAILED for s in states):
+        codes = sorted({t.last_error_code for t in tasks if t.last_error_code})
+        return "failed", ", ".join(codes) or None
+    if any(s == "cancelled" for s in states):
+        return "cancelled", None
+    if all(s == "skipped" for s in states):
+        return "skipped", "upstream task did not succeed"
+    return "succeeded", None
+
+
+def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
+    """Derive the 13-stage timeline from real task states and the job state. Never fabricated."""
+    by_stage: dict[str, list[Task]] = {}
+    for t in tasks:
+        by_stage.setdefault(t.stage, []).append(t)
+    terminal = job.state in TERMINAL_JOB_STATES
+    past_planning = job.state in {
+        JobState.RUNNING.value,
+        JobState.ANALYZING.value,
+        JobState.REPORTING.value,
+        JobState.COMPLETED.value,
+        JobState.COMPLETED_WITH_WARNINGS.value,
+    } or bool(tasks)
     stages: list[StageProgress] = []
     for stage in PIPELINE_STAGES:
         status, note = "pending", None
         if stage == "intake_and_pinning":
-            if job.state == JobState.VALIDATING.value and job.held_reason:
-                status, note = "held", job.held_reason
-            elif job.state in TERMINAL_JOB_STATES:
-                status, note = "not_run", "Job ended before intake ran"
-        stages.append(StageProgress(stage=stage, status=status, note=note))
+            if job.commit_sha:
+                status, note = "succeeded", f"pinned {job.commit_sha[:12]}"
+            elif job.state == JobState.VALIDATING.value:
+                status, note = "held" if job.held_reason else "running", job.held_reason
+            elif terminal:
+                status, note = "failed" if job.state == JobState.FAILED.value else "not_run", None
+        elif stage == "planning":
+            if past_planning:
+                status, note = "succeeded", "template plan"
+            elif job.state == JobState.PLANNING.value:
+                status = "running"
+            elif terminal:
+                status = "not_run"
+        elif stage in by_stage:
+            status, note = _stage_from_tasks(by_stage[stage])
+        elif stage == "evidence_correlation_and_triage":
+            if job.state == JobState.ANALYZING.value:
+                status = "running"
+            elif job.state in {
+                JobState.REPORTING.value,
+                JobState.COMPLETED.value,
+                JobState.COMPLETED_WITH_WARNINGS.value,
+            }:
+                status, note = "succeeded", "no findings engine yet (slice 2b)"
+            elif terminal:
+                status = "not_run"
+        elif stage == "quality_gates_and_reporting":
+            if job.state == JobState.REPORTING.value:
+                status = "running"
+            elif job.state in {JobState.COMPLETED.value, JobState.COMPLETED_WITH_WARNINGS.value}:
+                status, note = "succeeded", "report stored · gates arrive in slice 2d"
+            elif terminal:
+                status, note = (
+                    "not_run",
+                    "partial report" if job.state != JobState.BLOCKED.value else None,
+                )
+        elif stage == "cleanup_and_retention":
+            if terminal:
+                status = "succeeded" if job.state != JobState.BLOCKED.value else "not_run"
+        elif terminal:
+            status, note = "not_run", None
+        elif past_planning:
+            status, note = "skipped", "not in plan"
+        stages.append(
+            StageProgress(stage=stage, status=status, note=note, tasks=len(by_stage.get(stage, [])))
+        )
     return stages
 
 
 def to_detail(session: Session, job: Job) -> JobDetailOut:
-    rows = session.execute(
-        select(Task.state, func.count()).where(Task.job_id == job.id).group_by(Task.state)
+    tasks = list(session.execute(select(Task).where(Task.job_id == job.id)).scalars())
+    counts: dict[str, int] = {}
+    for t in tasks:
+        counts[t.state] = counts.get(t.state, 0) + 1
+    check_rows = session.execute(
+        select(CheckRun.outcome, func.count())
+        .where(CheckRun.job_id == job.id)
+        .group_by(CheckRun.outcome)
     ).all()
-    counts: dict[str, int] = {str(state): int(n) for state, n in rows}
+    test_rows = session.execute(
+        select(TestExecution.status, func.count())
+        .where(TestExecution.job_id == job.id)
+        .group_by(TestExecution.status)
+    ).all()
     return JobDetailOut.model_validate(
-        {**_columns(job), "links": _links(job), "stages": _stages(job), "task_summary": counts}
+        {
+            **_columns(job),
+            "links": _links(job),
+            "warnings": list(job.warnings.get("items", [])),
+            "stages": _stages(job, tasks),
+            "task_summary": counts,
+            "check_summary": {str(k): int(n) for k, n in check_rows},
+            "test_summary": {str(k): int(n) for k, n in test_rows},
+        }
     )
 
 
@@ -337,18 +439,24 @@ def cancel_job(
         details={"reason": reason},
     )
     cancelled_tasks = TaskQueue().cancel_job_tasks(session, job.id, actor=principal.user_id)
-    # No workers exist in this slice, so cleanup is confirmed immediately. Slice 1c will wait for
-    # the Execution Service to confirm worker destruction before this transition.
     job.held_reason = None
-    transition_job(
-        session,
-        job,
-        JobEvent.CLEANUP_CONFIRMED_USER,
-        actor_type="service",
-        actor_id="workflow",
-        correlation_id=correlation_id,
-        details={"cancelled_tasks": cancelled_tasks, "workers_destroyed": 0},
-    )
+    alive = session.execute(
+        select(func.count())
+        .select_from(WorkerRun)
+        .where(WorkerRun.job_id == job.id, WorkerRun.destroyed_at.is_(None))
+    ).scalar_one()
+    if alive == 0:
+        # Nothing is running anywhere: cleanup is confirmed immediately. Otherwise the scheduler
+        # confirms once the Execution Service has reported every worker run destroyed.
+        transition_job(
+            session,
+            job,
+            JobEvent.CLEANUP_CONFIRMED_USER,
+            actor_type="service",
+            actor_id="workflow",
+            correlation_id=correlation_id,
+            details={"cancelled_tasks": cancelled_tasks, "workers_destroyed": 0},
+        )
     return JobCancelOut(
         id=job.id, state=JobState(job.state), requested_by=principal.user_id, requested_at=now
     )

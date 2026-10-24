@@ -29,3 +29,7 @@ web/coverage/
 *.log
 .DS_Store
 Thumbs.db
+
+# Phase 2 local data
+data/
+backend/data/

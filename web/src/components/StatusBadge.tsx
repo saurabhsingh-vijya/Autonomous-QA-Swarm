@@ -53,6 +53,11 @@ export const STATE_TONES: Record<string, Tone> = {
   pending_validation: "amber",
   valid: "green",
   validation_failed: "red",
+  // Check outcomes (phase 2): passed/failed/skipped shared above
+  error: "orange",
+  // Stage statuses (phase 2)
+  held: "amber",
+  not_run: "grey",
 };
 
 export function stateLabel(state: string): string {

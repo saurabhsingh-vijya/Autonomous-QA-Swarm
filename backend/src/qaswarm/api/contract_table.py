@@ -44,8 +44,8 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
     ContractEndpoint("GET", "/jobs/{job_id}/events", "Server-Sent Events stream", "1a", True),
     ContractEndpoint("GET", "/jobs/{job_id}/plan", "Job plan (DAG)", "2c"),
     ContractEndpoint("POST", "/jobs/{job_id}/plan/approval", "Approve/reject plan (HA-05)", "2c"),
-    ContractEndpoint("GET", "/jobs/{job_id}/tasks", "Tasks with attempts and status", "1d"),
-    ContractEndpoint("GET", "/jobs/{job_id}/test-executions", "Test results", "1d"),
+    ContractEndpoint("GET", "/jobs/{job_id}/tasks", "Tasks with attempts and status", "1d", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/test-executions", "Test results", "1d", True),
     ContractEndpoint("GET", "/jobs/{job_id}/findings", "Findings", "2a"),
     ContractEndpoint("GET", "/findings/{finding_id}", "Finding with evidence references", "2b"),
     ContractEndpoint("POST", "/findings/{finding_id}/triage", "Change finding status", "2b"),
@@ -59,11 +59,23 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
     ),
     ContractEndpoint("GET", "/verifications/{verification_id}", "Verification result", "3d"),
     ContractEndpoint("GET", "/jobs/{job_id}/quality-gates", "Quality gate results", "2d"),
-    ContractEndpoint("GET", "/jobs/{job_id}/report", "Report", "1d"),
+    ContractEndpoint("GET", "/jobs/{job_id}/report", "Report", "1d", True),
     ContractEndpoint(
         "POST", "/jobs/{job_id}/release-decision", "Record release decision (HA-10)", "2d"
     ),
-    ContractEndpoint("GET", "/audit-events", "Audit trail", "1d"),
+    ContractEndpoint("GET", "/audit-events", "Audit trail", "1d", True),
+)
+
+# Endpoints added beyond the v0.1 contract table in phase 2 (recorded as a deviation for review).
+ADDITIONAL: tuple[ContractEndpoint, ...] = (
+    ContractEndpoint("GET", "/jobs/{job_id}/checks", "Check runs with outcomes", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/evidence", "Evidence items of a job", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/worker-runs", "Worker runs of a job", "2", True),
+    ContractEndpoint("GET", "/jobs/{job_id}/compare", "Compare two runs", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}", "Evidence metadata", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}/content", "Evidence inline text", "2", True),
+    ContractEndpoint("GET", "/evidence/{evidence_id}/download", "Evidence bytes", "2", True),
+    ContractEndpoint("GET", "/system/capabilities", "Build capabilities", "2", True),
 )
 
 

@@ -136,6 +136,7 @@ class StageProgress(ResponseModel):
     stage: str
     status: str
     note: str | None = None
+    tasks: int = 0
 
 
 class JobDetailOut(JobOut):
@@ -143,8 +144,204 @@ class JobDetailOut(JobOut):
     cancel_reason: str | None
     started_at: datetime | None
     ended_at: datetime | None
+    snapshot_sha256: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     stages: list[StageProgress]
     task_summary: dict[str, int]
+    check_summary: dict[str, int] = Field(default_factory=dict)
+    test_summary: dict[str, int] = Field(default_factory=dict)
+
+
+# ---- Phase 2: tasks, checks, tests, evidence, reports -------------------------------------
+class TaskAttemptOut(ResponseModel):
+    id: str
+    attempt_no: int
+    lease_owner: str
+    outcome: str
+    error_code: str | None
+    error_class: str | None
+    started_at: datetime | None
+    ended_at: datetime | None
+
+
+class TaskOut(ResponseModel):
+    id: str
+    job_id: str
+    stage: str
+    task_type: str
+    agent_id: str | None
+    state: str
+    engine: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    priority: int
+    attempt_count: int
+    last_error_code: str | None
+    last_error_class: str | None
+    lease_owner: str | None
+    available_at: datetime
+    state_changed_at: datetime
+    created_at: datetime
+    attempts: list[TaskAttemptOut] = Field(default_factory=list)
+
+
+class CheckRunOut(ResponseModel):
+    id: str
+    job_id: str
+    task_id: str
+    attempt_no: int
+    worker_run_id: str | None
+    engine_id: str
+    name: str
+    outcome: str
+    started_at: datetime
+    ended_at: datetime
+    duration_ms: int
+    failure_message: str | None
+    summary: dict[str, Any]
+    tool_name: str
+    tool_version: str
+    executes_repository_code: bool
+    log_evidence_id: str | None
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+class TestExecutionOut(ResponseModel):
+    id: str
+    job_id: str
+    check_run_id: str
+    node_id: str
+    file: str | None
+    name: str
+    status: str
+    duration_ms: int
+    message: str | None
+    purpose: str
+    provenance: str
+    tool_version: str
+    commit_sha: str | None
+
+
+class EvidenceItemOut(ResponseModel):
+    id: str
+    job_id: str
+    task_id: str | None
+    worker_run_id: str | None
+    kind: str
+    label: str
+    sha256: str
+    size_bytes: int
+    media_type: str
+    producer: str
+    redactions: int
+    truncated: bool
+    original_bytes: int | None
+    deterministic: bool
+    created_at: datetime
+
+
+class EvidenceContentOut(ResponseModel):
+    id: str
+    media_type: str
+    sha256: str
+    size_bytes: int
+    text: str | None
+    truncated_inline: bool
+
+
+class WorkerRunOut(ResponseModel):
+    id: str
+    job_id: str
+    task_id: str
+    worker_id: str
+    runtime: str
+    isolation: str
+    image_digest: str
+    limits: dict[str, Any]
+    network_policy: str
+    exit_code: int | None
+    outcome: str | None
+    output_bytes: int
+    truncated: bool
+    started_at: datetime
+    ended_at: datetime | None
+    destroyed_at: datetime | None
+
+
+class ReportOut(ResponseModel):
+    id: str
+    job_id: str
+    kind: str
+    verdict: str | None
+    digest: str
+    partial: bool
+    created_at: datetime
+    updated_at: datetime
+    content: dict[str, Any]
+
+
+class CompareCheck(ResponseModel):
+    engine: str
+    name: str
+    base: str | None
+    other: str | None
+    delta: str  # improved | regressed | unchanged | added | removed
+
+
+class CompareTest(ResponseModel):
+    node_id: str
+    base: str | None
+    other: str | None
+    delta: str
+
+
+class CompareJobRef(ResponseModel):
+    id: str
+    display_id: str
+    state: JobState
+    ref: str
+    commit_sha: str | None
+    created_at: datetime
+
+
+class CompareOut(ResponseModel):
+    base: CompareJobRef
+    other: CompareJobRef
+    same_repository: bool
+    same_commit: bool
+    checks: list[CompareCheck]
+    tests: list[CompareTest]
+    check_deltas: dict[str, int]
+    test_deltas: dict[str, int]
+    test_counts: dict[str, dict[str, int]]
+
+
+class AuditEventOut(ResponseModel):
+    id: str
+    seq: int
+    occurred_at: datetime
+    actor_type: str
+    actor_id: str
+    actor_role: str | None
+    action: str
+    subject_type: str
+    subject_id: str
+    job_id: str | None
+    correlation_id: str | None
+    details: dict[str, Any]
+    prev_hash: str
+    hash: str
+
+
+class CapabilitiesOut(BaseModel):
+    version: str
+    phase: str
+    execution_enabled: bool
+    repository_code_execution_allowed: bool
+    sandbox: str
+    dev_fixture_repos: bool
+    embedded_scheduler: bool
+    embedded_exec_worker: bool
+    engines: list[str]
 
 
 class JobCancelRequest(StrictModel):

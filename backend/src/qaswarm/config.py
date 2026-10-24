@@ -34,6 +34,25 @@ class Settings(BaseSettings):
     idempotency_ttl_hours: int = 24
     sse_heartbeat_seconds: int = 15
 
+    # Phase 2: execution engine. The Execution Service (qaswarm_exec) authenticates to the narrow
+    # internal API with this shared token; unset means the internal API refuses every call.
+    exec_token: str | None = None
+    # Content-addressed evidence objects live here (LLD key layout under this root).
+    evidence_dir: str = "./data/evidence"
+    evidence_inline_max_bytes: int = 1024 * 1024
+    # Intake: DNS resolution + private-address rejection before git ls-remote (SEC-002).
+    intake_dns_check: bool = True
+    intake_timeout_seconds: int = 60
+    # Dev-only fixture repositories (https://fixtures.local/<name>) resolved from a directory.
+    dev_fixture_repos: bool = False
+    fixtures_dir: str = "../exec/fixtures"
+    # Scheduler role settings; the scheduler can also run inside the API process for local dev.
+    scheduler_interval_seconds: float = 2.0
+    embedded_scheduler: bool = False
+    embedded_exec_worker: bool = False
+    exec_control_plane_url: str = "http://127.0.0.1:8000"
+    exec_allow_unsandboxed_code_execution: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

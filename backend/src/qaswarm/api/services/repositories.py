@@ -71,7 +71,10 @@ def validate_repository_url(url: str, provider: RepositoryProvider, settings: Se
         )
     if parts.port not in (None, 443):
         raise UrlRejected("host_not_allow_listed", "host", "Non-standard ports are not accepted.")
-    if host not in {h.lower() for h in settings.git_host_allowlist}:
+    allowed = {h.lower() for h in settings.git_host_allowlist}
+    if settings.dev_fixture_repos:
+        allowed.add("fixtures.local")  # dev-only fixture repositories (phase 2)
+    if host not in allowed:
         raise UrlRejected(
             "host_not_allow_listed", "host", f"Host '{host}' is not on the Git provider allow-list."
         )

@@ -6,3 +6,6 @@ export { DataTable, type Column } from "./DataTable";
 export { LoadingState } from "./LoadingState";
 export { PageHeader, type Crumb } from "./PageHeader";
 export { Dialog } from "./Dialog";
+export { OutcomeBadge } from "./OutcomeBadge";
+export { EvidenceDrawer } from "./EvidenceDrawer";
+export { ChecksTable } from "./ChecksTable";

@@ -29,6 +29,17 @@ class LeaseLost(Exception):
     """E-QUEUE-002: the caller no longer holds the lease for this task."""
 
 
+_TERMINAL_NOT_SUCCEEDED: frozenset[str] = frozenset(
+    {
+        TaskState.FAILED.value,
+        TaskState.INVALID_OUTPUT.value,
+        TaskState.TIMED_OUT.value,
+        TaskState.CANCELLED.value,
+        TaskState.SKIPPED.value,
+    }
+)
+
+
 @dataclass(frozen=True)
 class TaskSpec:
     org_id: str
@@ -354,6 +365,100 @@ class TaskQueue:
         _emit(
             session, task, "task.retry_scheduled", {"available_at": task.available_at.isoformat()}
         )
+
+    # -- timeouts and skips (phase 2) ----------------------------------------------------
+    def mark_timed_out(
+        self, session: Session, task_id: str, worker_id: str, *, error_code: str = "E-EXEC-007"
+    ) -> Task:
+        """The worker hit the task wall clock: ``running`` → ``timed_out`` (not retried)."""
+        task = self._owned_running_task(session, task_id, worker_id)
+        self._close_attempt(
+            session, task, TaskAttemptOutcome.FAILED, error_code, ErrorClass.TOOL_ERROR.value
+        )
+        task.last_error_code = error_code
+        task.last_error_class = ErrorClass.TOOL_ERROR.value
+        task.lease_owner = None
+        task.lease_expires_at = None
+        _set_state(
+            session,
+            task,
+            TaskEvent.TASK_TIMEOUT,
+            actor=worker_id,
+            details={"error_code": error_code},
+        )
+        return task
+
+    def expire_running_tasks(self, session: Session, wall_clock_seconds: int) -> list[str]:
+        """Scheduler-side enforcement of the task wall clock (defence in depth)."""
+        cutoff = _now() - timedelta(seconds=wall_clock_seconds)
+        rows = (
+            session.execute(
+                select(Task)
+                .join(
+                    TaskAttempt,
+                    (TaskAttempt.task_id == Task.id)
+                    & (TaskAttempt.attempt_no == Task.attempt_count),
+                )
+                .where(Task.state == TaskState.RUNNING.value, TaskAttempt.started_at < cutoff)
+                .with_for_update(of=Task, skip_locked=True)
+            )
+            .scalars()
+            .all()
+        )
+        expired: list[str] = []
+        for task in rows:
+            self._close_attempt(
+                session, task, TaskAttemptOutcome.FAILED, "E-EXEC-007", ErrorClass.TOOL_ERROR.value
+            )
+            task.last_error_code = "E-EXEC-007"
+            task.last_error_class = ErrorClass.TOOL_ERROR.value
+            task.lease_owner = None
+            task.lease_expires_at = None
+            _set_state(
+                session,
+                task,
+                TaskEvent.TASK_TIMEOUT,
+                actor="scheduler",
+                details={"error_code": "E-EXEC-007", "wall_clock_seconds": wall_clock_seconds},
+            )
+            expired.append(task.id)
+        return expired
+
+    def skip_blocked_dependents(self, session: Session, job_id: str, *, actor: str) -> list[str]:
+        """``pending`` tasks whose hard dependency ended without success → ``skipped``."""
+        tasks = (
+            session.execute(
+                select(Task)
+                .where(Task.job_id == job_id, Task.state == TaskState.PENDING.value)
+                .with_for_update(skip_locked=True)
+            )
+            .scalars()
+            .all()
+        )
+        if not tasks:
+            return []
+        states: dict[str, str] = {
+            str(task_id): str(state)
+            for task_id, state in session.execute(
+                select(Task.id, Task.state).where(Task.job_id == job_id)
+            ).all()
+        }
+        skipped: list[str] = []
+        for task in tasks:
+            deps: list[str] = list(task.depends_on.get("tasks", []))
+            blocked = [d for d in deps if states.get(d) in _TERMINAL_NOT_SUCCEEDED]
+            if not blocked:
+                continue
+            task.last_error_code = "E-DEP-001"
+            _set_state(
+                session,
+                task,
+                TaskEvent.UPSTREAM_FAILED,
+                actor=actor,
+                details={"blocked_by": blocked, "reason": "upstream task did not succeed"},
+            )
+            skipped.append(task.id)
+        return skipped
 
     # -- reaper --------------------------------------------------------------------------
     def reap_expired_leases(self, session: Session) -> list[str]:

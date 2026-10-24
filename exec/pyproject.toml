@@ -1,9 +1,14 @@
 [project]
 name = "qaswarm-exec"
 version = "0.1.0"
-description = "Autonomous QA Swarm Execution Service host agent (skeleton; implemented in slice 1c)"
+description = "Autonomous QA Swarm Execution Service host agent (phase 2: process runtime, check engines)"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+  "httpx>=0.27,<0.29",
+]
+
+[project.scripts]
+qaswarm-exec = "qaswarm_exec.host.runner:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -11,3 +16,14 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qaswarm_exec"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+extend-exclude = ["fixtures"]
+
+[tool.ruff.lint]
+pycodestyle = { max-line-length = 120 }
+select = ["E", "F", "I", "B", "UP", "N", "S", "SIM", "RUF"]
+ignore = ["S101", "RUF012", "B008", "N818"]

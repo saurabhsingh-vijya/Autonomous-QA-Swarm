@@ -91,6 +91,35 @@ class TestExecutionStatus(StrEnum):
     INFRASTRUCTURE_ERROR = "infrastructure_error"
 
 
+class CheckOutcome(StrEnum):
+    """Outcome of one check run (a task executed by a check engine).
+
+    ``error`` means the tool or the infrastructure failed; it never describes the code under
+    test. Individual tests inside a check use :class:`TestExecutionStatus`.
+    """
+
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+class EvidenceKind(StrEnum):
+    LOG = "log"
+    JUNIT_XML = "junit_xml"
+    SCANNER_REPORT = "scanner_report"
+    ENVIRONMENT_MANIFEST = "environment_manifest"
+    SOURCE_INVENTORY = "source_inventory"
+    STACK_TRACE = "stack_trace"
+
+
+class WorkerRunOutcome(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
 class FindingStatus(StrEnum):
     CANDIDATE = "candidate"
     TRIAGING = "triaging"
