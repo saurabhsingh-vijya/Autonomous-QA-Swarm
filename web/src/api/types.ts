@@ -183,6 +183,7 @@ export interface JobProfiles {
 export interface Job {
   id: string;
   display_id: string;
+  org_id?: string;
   state: JobState;
   repository_id: string;
   project_id: string;
@@ -197,6 +198,7 @@ export interface Job {
 export interface JobStage {
   stage: string;
   status: string;
+  note?: string | null;
 }
 
 export interface JobDetail extends Job {
@@ -205,6 +207,35 @@ export interface JobDetail extends Job {
   updated_at: string;
   stages?: JobStage[];
   cancel_requested_at?: string | null;
+  cancel_reason?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  current_stage?: string | null;
+  created_by?: string;
+  task_summary?: Record<string, number>;
+}
+
+export interface Capability {
+  available: boolean;
+  status: string;
+  planned_slice?: string | null;
+}
+
+export interface Capabilities {
+  product: string;
+  version: string;
+  local_only: boolean;
+  external_ai_providers: string;
+  telemetry_export: string;
+  auth_mode: string;
+  database: Capability;
+  storage: { driver: string; host: string; port: number; database: string };
+  execution_service: Capability;
+  evidence_store: Capability;
+  model_gateway: Capability;
+  test_engines: string[];
+  integrations: Record<string, Capability>;
+  limits: Record<string, number>;
 }
 
 export interface JobCreate {
@@ -226,4 +257,5 @@ export interface JobEvent {
   id: string;
   type: string;
   data: unknown;
+  receivedAt?: string;
 }

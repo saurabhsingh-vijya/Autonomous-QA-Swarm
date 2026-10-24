@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { JOB_STATES } from "../api/types";
-import { STATE_TONES, StatusBadge, stateLabel } from "./StatusBadge";
+import { StatusBadge } from "./StatusBadge";
+import { STATE_TONES, stateLabel } from "./status";
 
 describe("StatusBadge", () => {
   it("maps every job state to an explicit tone (no fallthrough)", () => {

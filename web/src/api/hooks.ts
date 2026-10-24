@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, eventsUrl } from "./client";
+import { api, eventsUrl, probe } from "./client";
 import type {
   JobCreate,
   JobEvent,
@@ -16,7 +16,21 @@ export const keys = {
   repositories: (projectId?: string) => ["repositories", projectId ?? "all"] as const,
   jobs: (params: JobListParams = {}) => ["jobs", params] as const,
   job: (id: string) => ["jobs", "detail", id] as const,
+  capabilities: ["system", "capabilities"] as const,
+  probe: (path: string) => ["probe", path] as const,
 };
+
+export const useCapabilities = () =>
+  useQuery({ queryKey: keys.capabilities, queryFn: api.getCapabilities, staleTime: 30_000 });
+
+/** Probe an endpoint that is not implemented yet; resolves to its problem+json (or null). */
+export const useProbe = (path: string | null) =>
+  useQuery({
+    queryKey: keys.probe(path ?? ""),
+    queryFn: () => probe(path ?? ""),
+    enabled: Boolean(path),
+    staleTime: 60_000,
+  });
 
 export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: api.listProjects });
 
@@ -111,7 +125,10 @@ export function useJobEvents(jobId: string | undefined) {
         /* keep raw */
       }
       if (type !== "heartbeat") {
-        setEvents((prev) => [...prev, { id: e.lastEventId, type, data }]);
+        setEvents((prev) => [
+          ...prev,
+          { id: e.lastEventId, type, data, receivedAt: new Date().toISOString() },
+        ]);
       }
       if (type === "job.state_changed") qc.invalidateQueries({ queryKey: keys.job(jobId) });
       if (type === "stream.end") {
