@@ -411,6 +411,7 @@ def test_registered_loopback_target_is_refused_by_the_worker_unless_local_mode(
         final2 = _drive(
             client, settings, _worker(client, settings, tmp_path, allow_local=True), job2["id"]
         )
+        assert final2["state"] in {"completed", "completed_with_warnings"}
         checks2 = {
             c["engine_id"]: c
             for c in client.get(f"/api/v1/jobs/{job2['id']}/checks", headers=LEAD).json()
