@@ -35,6 +35,7 @@ def test_settings() -> Settings:
         backoff_seconds=[30, 120],
         idempotency_ttl_hours=24,
         sse_heartbeat_seconds=1,
+        runner_enabled=False,
     )
 
 

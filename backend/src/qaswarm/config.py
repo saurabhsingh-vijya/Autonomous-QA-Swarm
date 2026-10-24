@@ -32,6 +32,18 @@ class Settings(BaseSettings):
     backoff_seconds: list[int] = Field(default_factory=lambda: [30, 120])
     backoff_jitter: float = 0.2
     idempotency_ttl_hours: int = 24
+
+    # Orchestration (phase 3). Local-first: deterministic adapters by default, no external AI.
+    runner_enabled: bool = True
+    runner_poll_seconds: float = 1.0
+    runner_worker_id: str = "raone-runner"
+    api_allowed_hosts: list[str] = Field(default_factory=lambda: ["localhost", "127.0.0.1"])
+    api_check_timeout_seconds: float = 10.0
+    llm_provider: str = "none"  # none | ollama
+    llm_base_url: str = "http://localhost:11434"
+    llm_model: str = "llama3.1"
+    llm_timeout_seconds: float = 60.0
+    llm_rate_limit_per_minute: int = 30
     sse_heartbeat_seconds: int = 15
 
 

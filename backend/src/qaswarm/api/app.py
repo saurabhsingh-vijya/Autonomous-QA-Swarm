@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from qaswarm import __version__
 from qaswarm.api.errors import install_error_handlers
 from qaswarm.api.middleware import CorrelationIdMiddleware
-from qaswarm.api.routers import health, jobs, projects, repositories, stubs, system
+from qaswarm.api.routers import health, jobs, projects, repositories, results, stubs, system
 from qaswarm.config import Settings, get_settings
 from qaswarm.telemetry.logging import configure_logging
+from qaswarm.workflow.runner import Runner
 
 API_PREFIX = "/api/v1"
 
@@ -19,7 +23,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        runner: Runner | None = None
+        if settings.runner_enabled:
+            runner = Runner(settings)
+            runner.start()
+        application.state.runner = runner
+        try:
+            yield
+        finally:
+            if runner is not None:
+                runner.stop()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="RaOne API",
         version=__version__,
         description=(
@@ -50,6 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api.include_router(repositories.router)
     api.include_router(jobs.router)
     api.include_router(system.router)
+    api.include_router(results.router)
     api.include_router(stubs.router)
     app.include_router(api)
     return app

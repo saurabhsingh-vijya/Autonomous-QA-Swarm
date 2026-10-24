@@ -189,7 +189,7 @@ def test_job_creation_is_honest_idempotent_and_duplicate_safe(
     first = _job(client, auth_headers, repo["id"], key)
     assert first.status_code == 202, first.text
     job = first.json()
-    assert job["state"] == "validating" and job["held_reason"] == "intake arrives in slice 1b"
+    assert job["state"] == "validating" and "slice 1b" in job["held_reason"]
     assert job["display_id"].startswith("QJ-") and job["commit_sha"] is None
     assert job["project_id"] == project["id"]
     assert first.headers["Location"] == f"/api/v1/jobs/{job['id']}"

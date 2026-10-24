@@ -31,12 +31,21 @@ from qaswarm.api.schemas import (
 from qaswarm.api.services.repositories import get_repository_row
 from qaswarm.audit.chain import append_event
 from qaswarm.config import Settings
-from qaswarm.db.models import IdempotencyRecord, Job, Organization, OutboxEvent, Task
+from qaswarm.db.models import (
+    IdempotencyRecord,
+    Job,
+    JobPlan,
+    Organization,
+    OutboxEvent,
+    Report,
+    Task,
+)
 from qaswarm.db.session import session_factory
 from qaswarm.domain.enums import PIPELINE_STAGES, TERMINAL_JOB_STATES, JobState, Role
 from qaswarm.domain.ids import display_id, new_id
 from qaswarm.domain.state_machines import JobEvent, JobStateMachine
 from qaswarm.workflow.jobs import transition_job
+from qaswarm.workflow.orchestrator import Orchestrator
 from qaswarm.workflow.queue import TaskQueue
 
 HELD_REASON = "intake arrives in slice 1b"
@@ -59,26 +68,97 @@ def to_out(job: Job) -> JobOut:
     return JobOut.model_validate({**_columns(job), "links": _links(job)})
 
 
-def _stages(job: Job) -> list[StageProgress]:
+_STAGE_RANK = {
+    "failed": 5,
+    "running": 4,
+    "leased": 4,
+    "pending": 3,
+    "retry_scheduled": 3,
+    "skipped": 2,
+    "cancelled": 2,
+    "succeeded": 1,
+}
+
+
+def _stages(job: Job, tasks: list[Task]) -> list[StageProgress]:
+    """Derive stage status from real task states; stages with no tasks are honest about why."""
+    by_stage: dict[str, list[Task]] = {}
+    for t in tasks:
+        by_stage.setdefault(t.stage, []).append(t)
+    terminal = job.state in TERMINAL_JOB_STATES
     stages: list[StageProgress] = []
     for stage in PIPELINE_STAGES:
         status, note = "pending", None
         if stage == "intake_and_pinning":
             if job.state == JobState.VALIDATING.value and job.held_reason:
                 status, note = "held", job.held_reason
-            elif job.state in TERMINAL_JOB_STATES:
-                status, note = "not_run", "Job ended before intake ran"
+            elif job.state == JobState.VALIDATING.value:
+                status = "running"
+            elif job.state == JobState.AWAITING_APPROVAL.value:
+                status, note = "awaiting_approval", job.held_reason
+            else:
+                status, note = (
+                    "not_run",
+                    "Repository intake arrives in slice 1b; this job used supplied inputs.",
+                )
+        elif stage in by_stage:
+            states = [t.state for t in by_stage[stage]]
+            if any(s in ("failed", "invalid_output", "timed_out") for s in states):
+                status = "failed"
+            elif any(s in ("leased", "running") for s in states):
+                status = "running"
+            elif all(s == "succeeded" for s in states):
+                status = "succeeded"
+            elif all(s in ("succeeded", "skipped") for s in states):
+                status, note = "succeeded", "some tasks skipped"
+            elif any(s == "cancelled" for s in states):
+                status = "cancelled"
+            else:
+                status = "pending"
+            agents = sorted({t.agent_id for t in by_stage[stage] if t.agent_id})
+            note = note or ("agents " + ", ".join(agents) if agents else None)
+        elif stage == "cleanup_and_retention":
+            status = "succeeded" if terminal and tasks else ("not_run" if terminal else "pending")
+            note = "no workers to destroy in this build" if terminal and tasks else None
+        elif terminal or tasks:
+            status, note = (
+                "not_planned",
+                "not part of this job's plan (no engine for this stage yet)",
+            )
         stages.append(StageProgress(stage=stage, status=status, note=note))
     return stages
 
 
 def to_detail(session: Session, job: Job) -> JobDetailOut:
-    rows = session.execute(
-        select(Task.state, func.count()).where(Task.job_id == job.id).group_by(Task.state)
-    ).all()
-    counts: dict[str, int] = {str(state): int(n) for state, n in rows}
+    tasks = list(
+        session.execute(
+            select(Task).where(Task.job_id == job.id).order_by(Task.created_at)
+        ).scalars()
+    )
+    counts: dict[str, int] = {}
+    for t in tasks:
+        counts[t.state] = counts.get(t.state, 0) + 1
+    report_available = (
+        session.execute(
+            select(func.count()).select_from(Report).where(Report.job_id == job.id)
+        ).scalar_one()
+        > 0
+    )
+    plan_available = (
+        session.execute(
+            select(func.count()).select_from(JobPlan).where(JobPlan.job_id == job.id)
+        ).scalar_one()
+        > 0
+    )
     return JobDetailOut.model_validate(
-        {**_columns(job), "links": _links(job), "stages": _stages(job), "task_summary": counts}
+        {
+            **_columns(job),
+            "links": _links(job),
+            "stages": _stages(job, tasks),
+            "report_available": report_available,
+            "plan_available": plan_available,
+            "task_summary": counts,
+        }
     )
 
 
@@ -168,6 +248,9 @@ def create_job(
         profiles=profiles,
         profile_hash=phash,
         state=JobState.CREATED.value,
+        inputs=body.inputs.model_dump(mode="json"),
+        require_plan_approval=body.require_plan_approval,
+        warnings={},
         force_new=body.force_new,
         created_by=principal.user_id,
         deadline_at=now + timedelta(seconds=settings.job_wall_clock_seconds),
@@ -212,29 +295,31 @@ def create_job(
         actor_id="api",
         correlation_id=correlation_id,
     )
-    job.held_reason = HELD_REASON
-    job.current_stage = "intake_and_pinning"
-    append_event(
-        session,
-        org_id=job.org_id,
-        actor_type="service",
-        actor_id="workflow",
-        action="job.held",
-        subject_type="job",
-        subject_id=job.id,
-        job_id=job.id,
-        correlation_id=correlation_id,
-        details={"reason": HELD_REASON},
+    Orchestrator.from_settings(settings).admit(
+        session, job, actor_id=principal.user_id, correlation_id=correlation_id
     )
-    session.add(
-        OutboxEvent(
-            id=new_id("outbox_event"),
+    if job.held_reason:
+        append_event(
+            session,
             org_id=job.org_id,
+            actor_type="service",
+            actor_id="workflow",
+            action="job.held",
+            subject_type="job",
+            subject_id=job.id,
             job_id=job.id,
-            event_type="job.held",
-            payload={"job_id": job.id, "reason": HELD_REASON, "stage": "intake_and_pinning"},
+            correlation_id=correlation_id,
+            details={"reason": job.held_reason},
         )
-    )
+        session.add(
+            OutboxEvent(
+                id=new_id("outbox_event"),
+                org_id=job.org_id,
+                job_id=job.id,
+                event_type="job.held",
+                payload={"job_id": job.id, "reason": job.held_reason, "stage": job.current_stage},
+            )
+        )
 
     status = 202
     body_out = json.loads(to_out(job).model_dump_json())

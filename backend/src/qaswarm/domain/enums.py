@@ -214,3 +214,14 @@ PIPELINE_STAGES: tuple[str, ...] = (
     "quality_gates_and_reporting",
     "cleanup_and_retention",
 )
+
+
+class AgentKind(StrEnum):
+    DETERMINISTIC = "deterministic"
+    LLM_ASSISTED = "llm_assisted"
+    DETERMINISTIC_WITH_LLM = "deterministic_with_llm"
+
+
+class ApprovalDecision(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"

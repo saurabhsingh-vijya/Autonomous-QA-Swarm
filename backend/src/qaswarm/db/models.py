@@ -135,6 +135,9 @@ class Job(TimestampMixin, Base):
     state: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     current_stage: Mapped[str | None] = mapped_column(String(50))
     held_reason: Mapped[str | None] = mapped_column(Text)
+    inputs: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    require_plan_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    warnings: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     force_new: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     deadline_at: Mapped[datetime | None]
@@ -267,3 +270,164 @@ class IdempotencyRecord(Base):
     response_headers: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
+
+
+class JobPlan(TimestampMixin, Base):
+    __tablename__ = "job_plans"
+    __table_args__ = (
+        UniqueConstraint("job_id", "revision", name="uq_job_plans_job_revision"),
+        CheckConstraint("id ~ '^pln_'", name="ck_job_plans_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(10), default="1.0", nullable=False)
+    dag: Mapped[dict[str, Any]] = mapped_column(nullable=False)
+    plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approved_at: Mapped[datetime | None]
+    planner: Mapped[str] = mapped_column(String(40), default="deterministic", nullable=False)
+
+
+class Approval(TimestampMixin, Base):
+    __tablename__ = "approvals"
+    __table_args__ = (CheckConstraint("id ~ '^apr_'", name="ck_approvals_id_prefix"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    ha_id: Mapped[str] = mapped_column(String(10), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String(20), nullable=False)
+    approver_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    role_at_decision: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    subject_hash: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime | None]
+
+
+class AgentOutput(Base):
+    """Schema-validated output of one agent task attempt, with provenance."""
+
+    __tablename__ = "agent_outputs"
+    __table_args__ = (CheckConstraint("id ~ '^aout_'", name="ck_agent_outputs_id_prefix"),)
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False, index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(10), nullable=False)
+    agent_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    adapter: Mapped[str] = mapped_column(String(60), nullable=False)
+    model_ref: Mapped[str | None] = mapped_column(String(120))
+    schema_name: Mapped[str] = mapped_column(String(60), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(10), nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(nullable=False)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+
+
+class EvidenceItem(Base):
+    """Content-addressed evidence kept in the local database (object store arrives in 1b)."""
+
+    __tablename__ = "evidence_items"
+    __table_args__ = (
+        UniqueConstraint("org_id", "sha256", name="uq_evidence_org_sha256"),
+        CheckConstraint("id ~ '^evd_'", name="ck_evidence_items_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(40))
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(80), default="application/json", nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    producer: Mapped[str] = mapped_column(String(120), nullable=False)
+    deterministic: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    redaction_status: Mapped[str] = mapped_column(String(20), default="redacted", nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+
+
+class TestExecution(Base):
+    __tablename__ = "test_executions"
+    __table_args__ = (
+        Index("ix_test_executions_job_status", "job_id", "status"),
+        CheckConstraint("id ~ '^tex_'", name="ck_test_executions_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), nullable=False)
+    scenario_id: Mapped[str | None] = mapped_column(String(80))
+    test_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    provenance: Mapped[str] = mapped_column(String(20), default="configured", nullable=False)
+    purpose: Mapped[str] = mapped_column(String(20), default="standard", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text)
+    meta: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    tool: Mapped[str] = mapped_column(String(80), nullable=False)
+    tool_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    evidence_id: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
+
+
+class Finding(TimestampMixin, Base):
+    __tablename__ = "findings"
+    __table_args__ = (
+        UniqueConstraint("org_id", "display_id", name="uq_findings_org_display_id"),
+        Index("ix_findings_org_fingerprint", "org_id", "fingerprint"),
+        CheckConstraint("dcs >= 0 AND dcs <= 100", name="ck_findings_dcs_range"),
+        CheckConstraint("id ~ '^fnd_'", name="ck_findings_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    display_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    category: Mapped[str] = mapped_column(String(60), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(20), nullable=False)
+    dcs: Mapped[int] = mapped_column(Integer, nullable=False)
+    dcs_breakdown: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    location: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    facts: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    inferred: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    evidence_ids: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    test_execution_ids: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class Report(Base):
+    __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("job_id", "kind", name="uq_reports_job_kind"),
+        CheckConstraint("id ~ '^rpt_'", name="ck_reports_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(30), default="main", nullable=False)
+    verdict: Mapped[str | None] = mapped_column(String(30))
+    generator: Mapped[str] = mapped_column(String(80), nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)

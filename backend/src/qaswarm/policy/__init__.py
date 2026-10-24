@@ -1,4 +1,2 @@
-"""qaswarm.policy: OPA client, policy input builders, decision recording.
-
-Implemented in slice 2c; empty in slice 1a.
-"""
+"""Policy decisions. This phase ships a deterministic local policy (``qaswarm.policy.local``);
+the OPA/Rego engine arrives in slice 2c."""

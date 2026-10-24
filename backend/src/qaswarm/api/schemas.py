@@ -89,10 +89,35 @@ class JobProfiles(StrictModel):
     performance: PerformanceProfile = PerformanceProfile.NONE
 
 
+class ApiCheck(StrictModel):
+    method: str = Field(default="GET", pattern=r"^(GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)$")
+    url: str = Field(min_length=8, max_length=2048)
+    expected_status: int = Field(default=200, ge=100, le=599)
+    priority: str = Field(default="P1", pattern=r"^P[0-2]$")
+    requirement_ref: str | None = Field(default=None, max_length=80)
+
+
+class JobInputs(StrictModel):
+    """Structured inputs the agents work from in this build (no repository intake yet)."""
+
+    requirements: list[str] = Field(default_factory=list, max_length=200)
+    api_checks: list[ApiCheck] = Field(default_factory=list, max_length=100)
+
+    @field_validator("requirements")
+    @classmethod
+    def _non_empty(cls, value: list[str]) -> list[str]:
+        cleaned = [v.strip() for v in value if v and v.strip()]
+        if any(len(v) > 2000 for v in cleaned):
+            raise ValueError("each requirement must be at most 2000 characters")
+        return cleaned
+
+
 class JobCreate(StrictModel):
     repository_id: str = Field(pattern=r"^rep_[0-9A-HJKMNP-TV-Z]{26}$")
     ref: str = Field(min_length=1, max_length=255)
     profiles: JobProfiles = Field(default_factory=JobProfiles)
+    inputs: JobInputs = Field(default_factory=JobInputs)
+    require_plan_approval: bool = False
     force_new: bool = False
 
     @field_validator("ref")
@@ -123,6 +148,7 @@ class JobOut(ResponseModel):
     state: JobState
     current_stage: str | None
     held_reason: str | None
+    require_plan_approval: bool
     force_new: bool
     created_by: str
     deadline_at: datetime | None
@@ -139,12 +165,21 @@ class StageProgress(ResponseModel):
 
 
 class JobDetailOut(JobOut):
+    inputs: dict[str, Any]
+    warnings: dict[str, Any]
+    report_available: bool = False
+    plan_available: bool = False
     cancel_requested_at: datetime | None
     cancel_reason: str | None
     started_at: datetime | None
     ended_at: datetime | None
     stages: list[StageProgress]
     task_summary: dict[str, int]
+
+
+class PlanApprovalRequest(StrictModel):
+    decision: str = Field(pattern=r"^(approve|reject)$")
+    reason: str | None = Field(default=None, max_length=1000)
 
 
 class JobCancelRequest(StrictModel):

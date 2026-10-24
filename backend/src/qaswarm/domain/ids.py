@@ -28,6 +28,9 @@ PREFIXES: dict[str, str] = {
     "verification_run": "ver_",
     "audit_event": "aud_",
     "outbox_event": "evt_",
+    "approval": "apr_",
+    "report": "rpt_",
+    "test_execution": "tex_",
 }
 
 _ULID_RE = re.compile(r"^[a-z_]+_[0-9A-HJKMNP-TV-Z]{26}$")
