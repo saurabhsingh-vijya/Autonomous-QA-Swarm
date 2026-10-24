@@ -55,7 +55,7 @@ export function NewJobScreen() {
             Draft
           </span>
         }
-        subtitle="Minimal launch form for slice 1a. The job is created and held in validating; intake, planning and execution arrive in later slices. Nothing executes."
+        subtitle="The job is created in validating; the scheduler pins the ref to a commit, plans the checks and the Execution Service runs them. Repository code (pytest) runs only where the exec host explicitly allows it."
       />
       {projects.data && projectItems.length === 0 ? (
         <EmptyState
@@ -155,7 +155,7 @@ export function NewJobScreen() {
                 maxLength={255}
               />
               <p className="mt-1 text-xs text-slate-500">
-                Resolved to an immutable commit SHA during validating (slice 1b).
+                Resolved to an immutable commit SHA during validating (git ls-remote).
               </p>
             </div>
 

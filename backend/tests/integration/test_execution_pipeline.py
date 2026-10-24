@@ -261,7 +261,8 @@ def test_second_run_on_fixed_ref_compares_as_improved(
     base = _drive(client, settings, worker, _job(client, repo["id"], "main")["id"])
     other = _drive(client, settings, worker, _job(client, repo["id"], "fix-rounding")["id"])
     assert other["state"] == "completed" and other["check_summary"] == {"passed": 4}
-    cmp = client.get(f"/api/v1/jobs/{base['id']}/compare?with={other['id']}", headers=LEAD).json()
+    # the fixed run is the base; its delta is read relative to the earlier (broken) run
+    cmp = client.get(f"/api/v1/jobs/{other['id']}/compare?with={base['id']}", headers=LEAD).json()
     assert cmp["same_repository"] is True and cmp["same_commit"] is False
     deltas = {c["engine"]: c["delta"] for c in cmp["checks"]}
     assert deltas["pytest"] == "improved" and deltas["python_syntax"] == "improved"
@@ -270,7 +271,7 @@ def test_second_run_on_fixed_ref_compares_as_improved(
     assert cmp["test_deltas"]["improved"] == 2 and all(
         t["delta"] == "improved" for t in cmp["tests"]
     )
-    assert cmp["test_counts"]["other"] == {"passed": 7}
+    assert cmp["test_counts"]["base"] == {"passed": 7}
     assert (
         client.get(f"/api/v1/jobs/{base['id']}/compare?with={base['id']}", headers=LEAD).status_code
         == 400

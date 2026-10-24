@@ -1,4 +1,4 @@
-"""Repository registration with **syntactic** URL validation only (slice 1a).
+"""Repository registration with syntactic URL validation at create time.
 
 Full SSRF defence (DNS pinning, private-address rejection, redirect checks) is slice 1b and is
 stated in ``validation_note``. Nothing is fetched here.
@@ -27,9 +27,10 @@ from qaswarm.domain.enums import RepositoryProvider, RepositoryValidationStatus
 from qaswarm.domain.ids import new_id
 
 VALIDATION_NOTE = (
-    "Syntactic validation only (slice 1a): HTTPS scheme, allow-listed host, owner/repo path and no "
+    "Syntactic validation passed: HTTPS scheme, allow-listed host, owner/repo path and no "
     "credentials in the URL were checked. DNS pinning, private-address rejection and reachability "
-    "checks arrive in slice 1b. No code was fetched."
+    "checks run when the first job pins this repository (status becomes valid or validation_failed). "
+    "No code was fetched."
 )
 
 _OWNER_REPO = re.compile(

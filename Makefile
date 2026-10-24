@@ -5,7 +5,7 @@ UV ?= uv
 NPM ?= npm
 COMPOSE ?= docker compose
 
-.PHONY: setup up down logs migrate migration seed dev dev-api dev-web lint typecheck test test-unit test-integration check fmt build
+.PHONY: setup up down logs migrate migration seed dev dev-api dev-web dev-scheduler dev-exec lint typecheck test test-unit test-integration check fmt build
 
 setup:
 	cd backend && $(UV) sync --all-groups
@@ -36,15 +36,21 @@ dev-api:
 dev-web:
 	cd web && $(NPM) run dev
 
+dev-scheduler:
+	cd backend && $(UV) run python -m qaswarm.workflow.scheduler
+
+dev-exec:
+	cd backend && AQS_EXEC_CONTROL_PLANE_URL=http://127.0.0.1:8000 $(UV) run python -m qaswarm_exec
+
 dev:
 	@echo "Run 'make dev-api' and 'make dev-web' in two terminals (or 'make up' for Compose)."
 
 lint:
-	cd backend && $(UV) run ruff check . && $(UV) run ruff format --check .
+	cd backend && $(UV) run ruff check . ../exec/src && $(UV) run ruff format --check . ../exec/src
 	cd web && $(NPM) run lint && $(NPM) run format:check
 
 typecheck:
-	cd backend && $(UV) run mypy
+	cd backend && $(UV) run mypy src ../exec/src
 	cd web && $(NPM) run typecheck
 
 test-unit:

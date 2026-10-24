@@ -52,7 +52,7 @@ export function FunctionalResultsScreen() {
       <PageHeader
         crumbs={[{ label: "Results" }, { label: "Functional Tests" }]}
         title="Functional Test Results"
-        subtitle="Existing pytest suites run by the Execution Service; each result is normalised to the six design statuses. Flaky reruns arrive in slice 1d."
+        subtitle="Existing pytest suites run by the Execution Service; each result is normalised to the six design statuses. Flaky reruns are not implemented yet."
         actions={
           <label className="text-sm">
             <span className="sr-only">Job</span>

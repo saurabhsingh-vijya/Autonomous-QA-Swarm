@@ -138,7 +138,7 @@ def test_repository_registration_and_syntactic_rejection(
     project = _project(client, auth_headers)
     repo = _repo(client, auth_headers, project["id"])
     assert repo["validation_status"] == "pending_validation"
-    assert "slice 1b" in repo["validation_note"]
+    assert "No code was fetched" in repo["validation_note"]
     assert (
         client.get(f"/api/v1/repositories/{repo['id']}", headers=auth_headers).json()["id"]
         == repo["id"]

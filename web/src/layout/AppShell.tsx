@@ -33,7 +33,7 @@ function Sidebar() {
           <div className="text-sm font-semibold leading-tight text-slate-900">
             Autonomous QA Swarm
           </div>
-          <div className="text-xs text-slate-500">v0.1 · Concept / Phase 1a</div>
+          <div className="text-xs text-slate-500">v0.1 · Phase 2 · execution engine</div>
         </div>
       </div>
       <nav aria-label="Primary" className="flex-1 overflow-y-auto px-3 pb-4">
@@ -71,7 +71,7 @@ function Sidebar() {
         ))}
       </nav>
       <div className="border-t border-slate-200 px-5 py-4 text-xs text-slate-500">
-        <div className="font-medium text-slate-800">Phase 1a · Boilerplate</div>
+        <div className="font-medium text-slate-800">Phase 2 · Execution engine</div>
         <div>Policy Engine: not yet wired (slice 2c)</div>
       </div>
     </aside>
@@ -151,9 +151,9 @@ export function ScreenFooter({ id, name }: { id: string; name: string }) {
   return (
     <footer className="mt-10 flex items-center justify-between border-t border-slate-200 pt-3 text-xs text-slate-500">
       <span>
-        <span className="font-semibold text-slate-700">{id}</span> · {name} · Phase 1a
+        <span className="font-semibold text-slate-700">{id}</span> · {name} · Phase 2
       </span>
-      <span>Proposed UI — only slice 1a behaviour is implemented</span>
+      <span>Screens marked with a slice badge are not implemented yet</span>
     </footer>
   );
 }

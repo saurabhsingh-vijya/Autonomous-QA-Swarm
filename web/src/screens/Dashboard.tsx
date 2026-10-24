@@ -55,7 +55,7 @@ export function DashboardScreen() {
         <Tile
           label="Repositories"
           value={repos.isLoading ? "…" : String(repos.data?.items.length ?? 0)}
-          note="syntactic validation only (slice 1a)"
+          note="validated when a job pins them"
         />
         <Tile
           label="Active jobs"
@@ -91,7 +91,7 @@ export function DashboardScreen() {
           <div className="p-4">
             <EmptyState
               title="No jobs yet"
-              description="Add a repository, then create a QA job. Nothing runs on the control plane; intake arrives in slice 1b."
+              description="Add a repository, then create a QA job. The scheduler pins the commit and the Execution Service runs the checks."
               action={
                 <Link to="/repositories" className="btn-primary">
                   Add a repository

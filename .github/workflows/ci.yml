@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, "phase-*"]
+    branches: [main, "phase-*", "phase*", "feature/*"]
   pull_request:
 
 permissions:
@@ -37,9 +37,9 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --all-groups --frozen
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run mypy
+      - run: uv run ruff check . ../exec/src
+      - run: uv run ruff format --check . ../exec/src
+      - run: uv run mypy src ../exec/src
       - run: uv run alembic upgrade head
       - run: uv run alembic downgrade base && uv run alembic upgrade head
       - run: uv run python -m pytest -q

@@ -139,7 +139,7 @@ export function AddRepositoryDialog({
       open={open}
       onClose={onClose}
       title="Add repository"
-      description="POST /api/v1/repositories · syntactic checks only in slice 1a; SSRF and DNS checks arrive in slice 1b. Nothing is cloned."
+      description="POST /api/v1/repositories · syntactic checks now; SSRF/DNS checks and commit pinning run with the first job. Nothing is cloned on the control plane."
     >
       <form onSubmit={submit} className="space-y-4" noValidate>
         {create.error ? <ProblemAlert error={create.error} /> : null}
@@ -212,7 +212,8 @@ export function AddRepositoryDialog({
         </div>
         <div>
           <label htmlFor="repo-branch" className="label">
-            Default branch <span className="text-slate-400">(optional, resolved in slice 1b)</span>
+            Default branch{" "}
+            <span className="text-slate-400">(optional, pinned by the first job)</span>
           </label>
           <input
             id="repo-branch"
@@ -263,7 +264,7 @@ export function RepositoriesScreen() {
       <PageHeader
         crumbs={[{ label: orgName ?? "Organisation" }, { label: "Repositories & Projects" }]}
         title="Repositories & Projects"
-        subtitle="Register repositories by HTTPS URL. In slice 1a only syntactic validation runs; the Source Intake Service (SSRF-safe, DNS-pinned) and commit pinning arrive in slice 1b. Credentials are references only."
+        subtitle="Register repositories by HTTPS URL. Syntactic validation runs now; the first job pins the ref to a commit after SSRF-safe DNS checks. Credentials are references only."
         actions={
           <>
             <button
@@ -464,7 +465,7 @@ export function RepositoriesScreen() {
               {
                 key: "lang",
                 header: "Language support",
-                render: (r) => r.language_support ?? "unknown (slice 1b)",
+                render: (r) => r.language_support ?? "unknown",
               },
               {
                 key: "validation",

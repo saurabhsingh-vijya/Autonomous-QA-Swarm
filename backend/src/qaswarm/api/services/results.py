@@ -254,7 +254,8 @@ def _delta(base: str | None, other: str | None, rank: dict[str, int]) -> str:
         return "removed"
     if base == other:
         return "unchanged"
-    return "improved" if rank.get(other or "", -1) > rank.get(base or "", -1) else "regressed"
+    # The delta describes the base job (the one in the URL) relative to the `with` job.
+    return "improved" if rank.get(base or "", -1) > rank.get(other or "", -1) else "regressed"
 
 
 def compare_jobs(session: Session, principal: Principal, job_id: str, other_id: str) -> CompareOut:
