@@ -65,7 +65,7 @@ def create_job(
     body: JobCreate,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*WRITE_ROLES),
     settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
@@ -101,7 +101,7 @@ def list_jobs(
     project_id: str | None = None,
     limit: int | None = Query(default=None, ge=1, le=200),
     cursor: str | None = None,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> Paginated[JobOut]:
     lim = clamp_limit(limit)
@@ -122,7 +122,7 @@ def list_jobs(
 def get_job(
     job_id: str,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> JobDetailOut:
     job = svc.get_job_row(session, principal, job_id)
@@ -140,7 +140,7 @@ def cancel_job(
     job_id: str,
     body: JobCancelRequest | None = None,
     if_match: str | None = Header(default=None, alias="If-Match"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*WRITE_ROLES),
 ) -> JobCancelOut:
     reason = body.reason if body else None
@@ -157,7 +157,7 @@ def cancel_job(
 @router.get("/{job_id}/tasks", response_model=list[TaskOut])
 def list_tasks(
     job_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> list[TaskOut]:
     return results_svc.list_tasks(session, principal, job_id)
@@ -166,7 +166,7 @@ def list_tasks(
 @router.get("/{job_id}/checks", response_model=list[CheckRunOut])
 def list_checks(
     job_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> list[CheckRunOut]:
     return results_svc.list_checks(session, principal, job_id)
@@ -178,7 +178,7 @@ def list_test_executions(
     response: Response,
     status: str | None = Query(default=None, description="Comma-separated test statuses"),
     limit: int | None = Query(default=None, ge=1, le=200),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> Paginated[TestExecutionOut]:
     lim = clamp_limit(limit)
@@ -191,7 +191,7 @@ def list_test_executions(
 @router.get("/{job_id}/evidence", response_model=list[EvidenceItemOut])
 def list_evidence(
     job_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> list[EvidenceItemOut]:
     return results_svc.list_evidence(session, principal, job_id)
@@ -200,7 +200,7 @@ def list_evidence(
 @router.get("/{job_id}/worker-runs", response_model=list[WorkerRunOut])
 def list_worker_runs(
     job_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> list[WorkerRunOut]:
     return results_svc.list_worker_runs(session, principal, job_id)
@@ -214,7 +214,7 @@ def list_worker_runs(
 def get_report(
     job_id: str,
     format: str = Query(default="json", pattern="^(json|html|pdf|sarif|junit)$"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> Response:
     report = results_svc.get_report(session, principal, job_id)
@@ -244,7 +244,7 @@ def get_report(
 def compare_jobs(
     job_id: str,
     with_job: str = Query(alias="with", description="Job id to compare against"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> CompareOut:
     return results_svc.compare_jobs(session, principal, job_id, with_job)
@@ -259,7 +259,7 @@ def job_events(
     job_id: str,
     request: Request,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:

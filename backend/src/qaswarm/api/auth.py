@@ -49,7 +49,7 @@ def _resolve_role(raw: str | None) -> Role:
 
 def get_principal(
     request: Request,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     settings: Settings = Depends(get_settings),
 ) -> Principal:
     if not settings.dev_auth:

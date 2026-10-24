@@ -18,7 +18,7 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 def list_projects(
     limit: int | None = Query(default=None, ge=1, le=200),
     cursor: str | None = None,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> Paginated[ProjectOut]:
     lim = clamp_limit(limit)
@@ -32,7 +32,7 @@ def list_projects(
 def create_project(
     body: ProjectCreate,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*PROJECT_WRITE_ROLES),
 ) -> ProjectOut:
     out = svc.create_project(session, principal, body, correlation_id_var.get())
@@ -45,7 +45,7 @@ def create_project(
 def get_project(
     project_id: str,
     response: Response,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = Depends(get_principal),
 ) -> ProjectOut:
     out = svc.get_project(session, principal, project_id)
@@ -60,7 +60,7 @@ def update_project(
     request: Request,
     response: Response,
     if_match: str | None = Header(default=None, alias="If-Match"),
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*PROJECT_WRITE_ROLES),
 ) -> ProjectOut:
     out = svc.update_project(
@@ -78,7 +78,7 @@ def update_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(
     project_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*PROJECT_WRITE_ROLES),
 ) -> Response:
     svc.archive_project(session, principal, project_id, correlation_id_var.get())

@@ -26,7 +26,7 @@ EVIDENCE_ROLES = (
 @router.get("/{evidence_id}", response_model=EvidenceItemOut)
 def get_evidence(
     evidence_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*EVIDENCE_ROLES),
 ) -> EvidenceItemOut:
     return EvidenceItemOut.model_validate(svc.get_evidence(session, principal, evidence_id))
@@ -35,7 +35,7 @@ def get_evidence(
 @router.get("/{evidence_id}/content", response_model=EvidenceContentOut)
 def get_evidence_content(
     evidence_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*EVIDENCE_ROLES),
     store: EvidenceStore = Depends(get_evidence_store),
     settings: Settings = Depends(get_settings),
@@ -50,7 +50,7 @@ def get_evidence_content(
 @router.get("/{evidence_id}/download", response_class=Response)
 def download_evidence(
     evidence_id: str,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     principal: Principal = require_role(*EVIDENCE_ROLES),
     store: EvidenceStore = Depends(get_evidence_store),
     settings: Settings = Depends(get_settings),

@@ -172,3 +172,26 @@ def test_dev_auth_query_parameters_are_only_accepted_on_the_sse_endpoint() -> No
     client = _client(Settings(dev_auth=True))
     r = client.get("/api/v1/system/capabilities?dev_user=u&dev_role=QA%20Lead")
     assert r.status_code == 401 and r.json()["error_code"] == "unauthenticated"
+
+
+# ------------------------------------------------------- dependency scope guard
+def test_every_get_db_dependency_uses_function_scope() -> None:
+    """FastAPI >= 0.118 commits ``yield`` dependencies after the response unless scope=function.
+
+    Without it a client can get a 404 for the row its previous request just created.
+    """
+    import re
+
+    src = Path(__file__).resolve().parents[2] / "src" / "qaswarm" / "api"
+    offenders = []
+    for path in src.rglob("*.py"):
+        for m in re.finditer(r"Depends\(get_db[^)]*\)", path.read_text(encoding="utf-8")):
+            if 'scope="function"' not in m.group(0):
+                offenders.append(f"{path.name}: {m.group(0)}")
+    assert not offenders, offenders
+
+
+def test_serve_entry_point_builds_the_app_without_multiprocessing() -> None:
+    from qaswarm.api import serve
+
+    assert isinstance(serve._ensure_multiprocessing_importable(), bool)

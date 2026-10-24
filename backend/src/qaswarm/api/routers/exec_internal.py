@@ -57,7 +57,7 @@ def get_queue(settings: Settings = Depends(get_settings)) -> TaskQueue:
 @router.post("/lease", response_model=LeaseResponse, dependencies=[Depends(require_exec_token)])
 def lease(
     body: LeaseRequest,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     queue: TaskQueue = Depends(get_queue),
     settings: Settings = Depends(get_settings),
 ) -> LeaseResponse:
@@ -72,7 +72,7 @@ def lease(
 def heartbeat(
     task_id: str,
     body: HeartbeatRequest,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     queue: TaskQueue = Depends(get_queue),
 ) -> HeartbeatResponse:
     state, expires = svc.heartbeat(session, queue, task_id, body.worker_id)
@@ -86,7 +86,7 @@ def heartbeat(
     dependencies=[Depends(require_exec_token)],
 )
 def create_worker_run(
-    task_id: str, body: WorkerRunCreate, session: Session = Depends(get_db)
+    task_id: str, body: WorkerRunCreate, session: Session = Depends(get_db, scope="function")
 ) -> WorkerRunCreated:
     run = svc.create_worker_run(session, task_id, body)
     return WorkerRunCreated(worker_run_id=run.id)
@@ -98,7 +98,9 @@ def create_worker_run(
     dependencies=[Depends(require_exec_token)],
 )
 def destroy_worker_run(
-    worker_run_id: str, body: WorkerRunDestroyed, session: Session = Depends(get_db)
+    worker_run_id: str,
+    body: WorkerRunDestroyed,
+    session: Session = Depends(get_db, scope="function"),
 ) -> TaskStateOut:
     run = svc.destroy_worker_run(session, worker_run_id, body)
     return TaskStateOut(task_id=run.task_id, state="destroyed")
@@ -113,7 +115,7 @@ def destroy_worker_run(
 def upload_evidence(
     task_id: str,
     body: EvidenceUpload,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     store: EvidenceStore = Depends(get_evidence_store),
 ) -> EvidenceUploaded:
     return svc.upload_evidence(session, store, task_id, body)
@@ -128,7 +130,7 @@ def upload_evidence(
 def submit_result(
     task_id: str,
     body: ResultSubmit,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     queue: TaskQueue = Depends(get_queue),
 ) -> TaskStateOut:
     return TaskStateOut(task_id=task_id, state=svc.submit_result(session, queue, task_id, body))
@@ -140,7 +142,7 @@ def submit_result(
 def submit_failure(
     task_id: str,
     body: FailureSubmit,
-    session: Session = Depends(get_db),
+    session: Session = Depends(get_db, scope="function"),
     queue: TaskQueue = Depends(get_queue),
 ) -> TaskStateOut:
     return TaskStateOut(task_id=task_id, state=svc.submit_failure(session, queue, task_id, body))
