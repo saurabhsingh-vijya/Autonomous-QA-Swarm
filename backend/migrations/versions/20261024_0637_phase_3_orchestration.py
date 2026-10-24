@@ -26,23 +26,17 @@ def _jsonb() -> postgresql.JSONB:
 
 def upgrade() -> None:
     # --- jobs: supplied inputs and the HA-05 flag (warnings/snapshot come from phase 2)
-    op.add_column(
-        "jobs", sa.Column("inputs", _jsonb(), server_default="{}", nullable=False)
-    )
+    op.add_column("jobs", sa.Column("inputs", _jsonb(), server_default="{}", nullable=False))
     op.add_column(
         "jobs",
-        sa.Column(
-            "require_plan_approval", sa.Boolean(), server_default="false", nullable=False
-        ),
+        sa.Column("require_plan_approval", sa.Boolean(), server_default="false", nullable=False),
     )
 
     # --- phase 2 tables gain the agent columns
     op.add_column("test_executions", sa.Column("scenario_id", sa.String(length=80)))
     op.add_column(
         "test_executions",
-        sa.Column(
-            "test_type", sa.String(length=30), server_default="functional", nullable=False
-        ),
+        sa.Column("test_type", sa.String(length=30), server_default="functional", nullable=False),
     )
     op.add_column(
         "test_executions", sa.Column("meta", _jsonb(), server_default="{}", nullable=False)
@@ -53,9 +47,7 @@ def upgrade() -> None:
     )
     op.add_column("test_executions", sa.Column("evidence_id", sa.String(length=40)))
     op.alter_column("test_executions", "check_run_id", existing_type=sa.String(40), nullable=True)
-    op.alter_column(
-        "test_executions", "node_id", existing_type=sa.String(500), server_default=""
-    )
+    op.alter_column("test_executions", "node_id", existing_type=sa.String(500), server_default="")
     op.add_column("evidence_items", sa.Column("content", _jsonb(), nullable=True))
     op.add_column(
         "evidence_items",
@@ -63,9 +55,7 @@ def upgrade() -> None:
             "redaction_status", sa.String(length=20), server_default="redacted", nullable=False
         ),
     )
-    op.alter_column(
-        "evidence_items", "storage_key", existing_type=sa.String(300), nullable=True
-    )
+    op.alter_column("evidence_items", "storage_key", existing_type=sa.String(300), nullable=True)
     op.add_column(
         "reports",
         sa.Column("generator", sa.String(length=80), server_default="", nullable=False),
@@ -204,14 +194,10 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_approvals_org_id"), table_name="approvals")
     op.drop_table("approvals")
     op.drop_column("reports", "generator")
-    op.alter_column(
-        "evidence_items", "storage_key", existing_type=sa.String(300), nullable=False
-    )
+    op.alter_column("evidence_items", "storage_key", existing_type=sa.String(300), nullable=False)
     op.drop_column("evidence_items", "redaction_status")
     op.drop_column("evidence_items", "content")
-    op.alter_column(
-        "test_executions", "check_run_id", existing_type=sa.String(40), nullable=False
-    )
+    op.alter_column("test_executions", "check_run_id", existing_type=sa.String(40), nullable=False)
     op.drop_column("test_executions", "evidence_id")
     op.drop_column("test_executions", "tool")
     op.drop_column("test_executions", "meta")
