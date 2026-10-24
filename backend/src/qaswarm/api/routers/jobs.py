@@ -22,6 +22,7 @@ from qaswarm.api.schemas import (
     JobOut,
     Paginated,
     ReportOut,
+    RerunRequest,
     TaskOut,
     TestExecutionOut,
     WorkerRunOut,
@@ -151,6 +152,41 @@ def cancel_job(
         reason,
         parse_if_match(if_match, job_id),
         correlation_id_var.get(),
+    )
+
+
+@router.post(
+    "/{job_id}/rerun",
+    status_code=202,
+    response_model=JobOut,
+    summary="Rerun selected checks of a finished job as a new job (regression check)",
+    responses={
+        409: {"description": "invalid_state_transition"},
+        422: {"description": "unknown engine"},
+    },
+)
+def rerun_job(
+    job_id: str,
+    body: RerunRequest,
+    session: Session = Depends(get_db),
+    principal: Principal = require_role(*WRITE_ROLES),
+    settings: Settings = Depends(get_settings),
+) -> JSONResponse:
+    status_code, out = svc.rerun_job(
+        session,
+        principal,
+        job_id,
+        body,
+        settings=settings,
+        correlation_id=correlation_id_var.get(),
+    )
+    return JSONResponse(
+        status_code=status_code,
+        content=out,
+        headers={
+            "Location": f"/api/v1/jobs/{out['id']}",
+            "ETag": etag_for(out["id"], out["version"]),
+        },
     )
 
 

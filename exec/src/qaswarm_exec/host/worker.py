@@ -30,6 +30,7 @@ from qaswarm_exec.host.source import FetchedSource, FetchError, fetcher_for
 from qaswarm_exec.results.worker_result import build_worker_result
 from qaswarm_exec.runtime.base import RunLimits, Runtime, Workspace
 from qaswarm_exec.tools.base import ERROR, PASSED, SKIPPED, CheckContext, CheckResult
+from qaswarm_exec.tools.browser_tests import playwright_status
 from qaswarm_exec.tools.registry import ENGINES, UnknownEngine, get_engine
 
 log = logging.getLogger("qaswarm_exec.worker")
@@ -87,6 +88,7 @@ class ExecWorker:
         allow_code_execution: bool = False,
         fixtures_dir: str | None = None,
         heartbeat_seconds: float = 30.0,
+        engine_settings: dict[str, Any] | None = None,
     ) -> None:
         self.client = client
         self.runtime = runtime
@@ -95,6 +97,12 @@ class ExecWorker:
         self.allow_code_execution = allow_code_execution
         self.fixtures_dir = fixtures_dir
         self.heartbeat_seconds = heartbeat_seconds
+        # Phase 4: worker-level settings for target-facing engines (never secrets).
+        self.engine_settings: dict[str, Any] = {
+            "fixtures_dir": fixtures_dir,
+            "allow_local_targets": False,
+            **(engine_settings or {}),
+        }
         self.image_digest = (
             "sha256:"
             + hashlib.sha256(
@@ -285,6 +293,8 @@ class ExecWorker:
             "platform": platform.platform(),
             "engines": sorted(ENGINES),
             "repository_code_execution_allowed": self.allow_code_execution,
+            "browser_testing": playwright_status()[1],
+            "local_targets_allowed": bool(self.engine_settings.get("allow_local_targets")),
         }
         ev = sink.put(
             kind="environment_manifest",
@@ -370,6 +380,7 @@ class ExecWorker:
             allow_code_execution=self.allow_code_execution,
             cancel=cancel,
             snapshot_sha256=expected or fetched.snapshot_sha256,
+            settings=self.engine_settings,
         )
         if engine.executes_repository_code and not self.allow_code_execution:
             result = CheckResult(

@@ -57,6 +57,10 @@ class CheckContext:
     allow_code_execution: bool
     cancel: threading.Event
     snapshot_sha256: str | None = None
+    # Worker-level settings the engines may consult (phase 4): ``fixtures_dir``,
+    # ``allow_local_targets``, ``perf_max_requests``, ``perf_max_concurrency``,
+    # ``perf_max_duration_seconds``. Never secrets.
+    settings: dict[str, Any] = field(default_factory=dict)
 
 
 class CheckEngine(Protocol):

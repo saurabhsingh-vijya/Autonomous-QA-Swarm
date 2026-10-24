@@ -100,6 +100,61 @@ class Repository(TimestampMixin, Base):
     project: Mapped[Project] = relationship(back_populates="repositories")
 
 
+class TargetEnvironment(TimestampMixin, Base):
+    """Registered non-production target (FR-050). ``kind`` is ``registered`` or ``ephemeral``.
+
+    Tests may run against it only under an unexpired :class:`TargetAuthorization` (HA-01).
+    Credentials are never stored here; ``credential_ref_id`` points to the secrets broker.
+    """
+
+    __tablename__ = "target_environments"
+    __table_args__ = (
+        UniqueConstraint("org_id", "project_id", "name", name="uq_targets_project_name"),
+        CheckConstraint("id ~ '^tgt_'", name="ck_target_environments_id_prefix"),
+        CheckConstraint("kind IN ('registered', 'ephemeral')", name="ck_target_environments_kind"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    environment_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False)
+    owner: Mapped[str] = mapped_column(String(200), nullable=False)
+    network_scope: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    credential_ref_id: Mapped[str | None] = mapped_column(String(40))
+    archived_at: Mapped[datetime | None]
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+    authorizations: Mapped[list[TargetAuthorization]] = relationship(back_populates="target")
+
+
+class TargetAuthorization(TimestampMixin, Base):
+    """HA-01 attestation that testing the target is permitted (activities, time window)."""
+
+    __tablename__ = "target_authorizations"
+    __table_args__ = (
+        Index("ix_target_authorizations_target", "target_id", "valid_until"),
+        CheckConstraint("id ~ '^tauth_'", name="ck_target_authorizations_id_prefix"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), nullable=False, index=True)
+    target_id: Mapped[str] = mapped_column(
+        ForeignKey("target_environments.id"), nullable=False, index=True
+    )
+    attested_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    attested_role: Mapped[str] = mapped_column(String(40), nullable=False)
+    allowed_activities: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(nullable=False)
+    valid_until: Mapped[datetime] = mapped_column(nullable=False)
+    revoked_at: Mapped[datetime | None]
+    note: Mapped[str | None] = mapped_column(Text)
+
+    target: Mapped[TargetEnvironment] = relationship(back_populates="authorizations")
+
+
 class Job(TimestampMixin, Base):
     __tablename__ = "jobs"
     __table_args__ = (
@@ -133,6 +188,8 @@ class Job(TimestampMixin, Base):
     snapshot_sha256: Mapped[str | None] = mapped_column(String(64))
     warnings: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     profiles: Mapped[dict[str, Any]] = mapped_column(nullable=False)
+    # Phase 4: optional job inputs: ``target_id``, ``testing`` configuration, ``rerun`` origin.
+    inputs: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     profile_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     current_stage: Mapped[str | None] = mapped_column(String(50))

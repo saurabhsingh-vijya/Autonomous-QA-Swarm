@@ -23,6 +23,7 @@ from qaswarm.api.routers import (
     repositories,
     stubs,
     system,
+    targets,
 )
 from qaswarm.config import Settings, get_settings
 from qaswarm.telemetry.logging import configure_logging
@@ -87,6 +88,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Control-plane API. Phase 2: projects, repositories, idempotent job creation, Intake & "
             "Pinning (git ls-remote), template planning, task leasing for the Execution Service, "
             "check runs, test executions, evidence, reports, run comparison and the audit trail. "
+            "Phase 4: target environments with HA-01 attestations, API/browser/security/performance "
+            "checks against authorised targets, and regression reruns. "
             "Endpoints not built yet return 501 with their planned slice. The control plane never "
             "executes repository code."
         ),
@@ -117,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(projects.router)
     api.include_router(repositories.router)
+    api.include_router(targets.router)
     api.include_router(jobs.router)
     api.include_router(evidence.router)
     api.include_router(audit.router)

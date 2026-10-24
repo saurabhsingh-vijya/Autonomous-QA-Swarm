@@ -160,6 +160,37 @@ Errors are `application/problem+json` with `type`, `title`, `status`, `detail`, 
   implemented (`501` / "planned slice").
 - Private-network targets are rejected at intake; there is no allow-list for internal git hosts yet.
 
+## Phase 4: advanced testing capabilities
+
+Four target-facing check engines run **only** against an explicitly configured, authorised target
+(branch `phase4-advanced-testing`, details in `docs/build/phase-4-report.md`):
+
+| Engine | What it does | Planned when |
+|---|---|---|
+| `api_tests` | Declarative HTTP suites (`.qaswarm/tests/*.yaml`, explicit paths or inline): method, headers, body, status / header / JSON-path / body / response-time assertions, captures, response-time recording | `testing.api` on the job |
+| `browser_tests` | Playwright + Chromium steps (`goto`, `click`, `fill`, `press`, `expect`, `screenshot`); screenshots and the console log become evidence; ends `skipped` with the reason when Playwright/Chromium is missing | `testing.browser` on the job |
+| `security_checks` | Read-only hygiene checks: security headers, cookie flags, redirect sanity, verbose error bodies, version disclosure. **Informational, not a security assessment or certification.** | `profiles.security` = `quick` / `standard` **and** a target |
+| `performance_probe` | Bounded closed-loop GET probe (`smoke` ≤ 50 requests / 2 workers / 10 s, `baseline` ≤ 200 / 5 / 30 s, clamped by worker caps); p50/p95/p99, throughput, error rate | `profiles.performance` = `smoke` / `baseline` **and** a target |
+
+Targets: `POST /api/v1/targets` (Org Admin) registers a non-production base URL;
+`POST /api/v1/targets/{id}/authorizations` (Org Admin or Security Reviewer) records the HA-01
+attestation (activities + time window). A job naming `target_id` without a valid attestation ends
+`blocked` with zero worker runs. For local development set `"testing": {"target": "local_fixture"}`
+and the worker starts `exec/fixtures/sample-target-app` on an ephemeral loopback port.
+`POST /api/v1/jobs/{id}/rerun` `{"engines": [...]}` reruns selected checks of a finished job as a
+new job and links to `GET /jobs/{old}/compare?with={new}`. Plans without this configuration are
+unchanged.
+
+Egress guardrails (worker): hosts resolving to loopback, RFC1918, link-local (incl.
+`169.254.169.254`), CGNAT or other non-public ranges are refused at connect time, redirects are
+re-checked hop by hop and must stay on the authorised host, browser traffic goes through a
+worker-local policy proxy, and `Authorization`, cookies and tokens are redacted from all evidence.
+`AQS_EXEC_ALLOW_LOCAL_TARGETS=true` (worker) plus `AQS_ALLOW_LOCAL_TARGETS=true` (control plane)
+enable controlled local testing of registered loopback/private targets. Performance caps:
+`AQS_EXEC_PERF_MAX_REQUESTS` (500), `AQS_EXEC_PERF_MAX_CONCURRENCY` (10),
+`AQS_EXEC_PERF_MAX_DURATION_SECONDS` (60). Browser engine install:
+`uv sync --all-groups` (pulls `qaswarm-exec[browser]`) then `python -m playwright install chromium`.
+
 ## Non-negotiable rules (from `CLAUDE.md`)
 
 - The control plane never executes repository code.

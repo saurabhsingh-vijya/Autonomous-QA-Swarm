@@ -30,12 +30,13 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
         "Re-validate reachability and resolve default branch",
         "1b",
     ),
-    ContractEndpoint("POST", "/targets", "Register target environment", "2b"),
+    ContractEndpoint("POST", "/targets", "Register target environment", "4", True),
     ContractEndpoint(
         "POST",
         "/targets/{target_id}/authorizations",
         "Record authorization attestation (HA-01)",
-        "2b",
+        "4",
+        True,
     ),
     ContractEndpoint("POST", "/jobs", "Create QA job", "1a", True),
     ContractEndpoint("GET", "/jobs", "List jobs", "1a", True),
@@ -76,6 +77,19 @@ ADDITIONAL: tuple[ContractEndpoint, ...] = (
     ContractEndpoint("GET", "/evidence/{evidence_id}/content", "Evidence inline text", "2", True),
     ContractEndpoint("GET", "/evidence/{evidence_id}/download", "Evidence bytes", "2", True),
     ContractEndpoint("GET", "/system/capabilities", "Build capabilities", "2", True),
+    # Phase 4 additions (deviation for review): target listing/revocation and regression reruns.
+    ContractEndpoint("GET", "/targets", "List target environments", "4", True),
+    ContractEndpoint("GET", "/targets/{target_id}", "Target environment details", "4", True),
+    ContractEndpoint(
+        "DELETE",
+        "/targets/{target_id}/authorizations/{authorization_id}",
+        "Revoke an authorization attestation",
+        "4",
+        True,
+    ),
+    ContractEndpoint(
+        "POST", "/jobs/{job_id}/rerun", "Rerun selected checks as a new job", "4", True
+    ),
 )
 
 

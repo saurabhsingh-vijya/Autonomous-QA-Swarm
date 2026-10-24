@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -89,11 +89,57 @@ class JobProfiles(StrictModel):
     performance: PerformanceProfile = PerformanceProfile.NONE
 
 
+# ---- Phase 4: testing configuration carried by a job ---------------------------------------
+Activity = Literal["api", "browser", "security", "performance"]
+
+
+class ApiTestingConfig(StrictModel):
+    """API suites: paths inside the snapshot, inline documents, or both (default: discovery)."""
+
+    suites: list[str] | None = Field(default=None, max_length=50)
+    inline: list[dict[str, Any]] | None = Field(default=None, max_length=50)
+    environment: str | None = Field(default=None, max_length=100)
+    environments: dict[str, dict[str, Any]] | None = None
+
+
+class BrowserTestingConfig(StrictModel):
+    suites: list[str] | None = Field(default=None, max_length=50)
+    inline: list[dict[str, Any]] | None = Field(default=None, max_length=50)
+    screenshots: Literal["on_failure", "always", "never"] = "on_failure"
+
+
+class SecurityTestingConfig(StrictModel):
+    paths: list[str] = Field(default_factory=lambda: ["/"], max_length=25)
+
+
+class PerformanceTestingConfig(StrictModel):
+    paths: list[str] = Field(default_factory=lambda: ["/health"], max_length=10)
+    max_requests: int | None = Field(default=None, ge=1, le=10_000)
+    concurrency: int | None = Field(default=None, ge=1, le=100)
+    duration_seconds: int | None = Field(default=None, ge=1, le=600)
+    thresholds: dict[str, float] | None = None
+
+
+class TestingConfig(StrictModel):
+    """Explicit scope for the target-facing engines. Absent → plans are unchanged."""
+
+    target: Literal["local_fixture"] | None = Field(
+        default=None,
+        description="Use the worker-started sample target app (dev-only) instead of target_id.",
+    )
+    api: ApiTestingConfig | None = None
+    browser: BrowserTestingConfig | None = None
+    security: SecurityTestingConfig | None = None
+    performance: PerformanceTestingConfig | None = None
+
+
 class JobCreate(StrictModel):
     repository_id: str = Field(pattern=r"^rep_[0-9A-HJKMNP-TV-Z]{26}$")
     ref: str = Field(min_length=1, max_length=255)
     profiles: JobProfiles = Field(default_factory=JobProfiles)
     force_new: bool = False
+    target_id: str | None = Field(default=None, pattern=r"^tgt_[0-9A-HJKMNP-TV-Z]{26}$")
+    testing: TestingConfig | None = None
 
     @field_validator("ref")
     @classmethod
@@ -109,6 +155,7 @@ class JobCreate(StrictModel):
 class JobLinks(ResponseModel):
     self: str
     events: str
+    compare: str | None = None  # set for reruns: compare with the job that was rerun
 
 
 class JobOut(ResponseModel):
@@ -120,6 +167,7 @@ class JobOut(ResponseModel):
     ref: str
     commit_sha: str | None
     profiles: dict[str, Any]
+    inputs: dict[str, Any] = Field(default_factory=dict)
     state: JobState
     current_stage: str | None
     held_reason: str | None
@@ -342,6 +390,8 @@ class CapabilitiesOut(BaseModel):
     embedded_scheduler: bool
     embedded_exec_worker: bool
     engines: list[str]
+    target_engines: list[str] = Field(default_factory=list)
+    local_targets_allowed: bool = False
 
 
 class JobCancelRequest(StrictModel):
@@ -365,3 +415,60 @@ class ReadyOut(BaseModel):
     status: str
     version: str
     database: str
+
+
+# ---- Phase 4: targets, authorizations, reruns -----------------------------------------------
+class TargetCreate(StrictModel):
+    project_id: str = Field(pattern=r"^prj_[0-9A-HJKMNP-TV-Z]{26}$")
+    name: str = Field(min_length=1, max_length=200)
+    kind: Literal["registered"] = "registered"
+    environment_type: Literal["staging", "test", "qa", "dev", "sandbox", "preview"]
+    base_url: str = Field(min_length=1, max_length=2048)
+    owner: str = Field(min_length=1, max_length=200)
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=20)
+    credential_ref_id: str | None = Field(default=None, max_length=40)
+
+
+class AuthorizationCreate(StrictModel):
+    allowed_activities: list[Activity] = Field(min_length=1, max_length=4)
+    valid_from: datetime | None = None
+    valid_until: datetime
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class AuthorizationOut(ResponseModel):
+    id: str
+    target_id: str
+    attested_by: str
+    attested_role: str
+    allowed_activities: list[str]
+    valid_from: datetime
+    valid_until: datetime
+    revoked_at: datetime | None
+    note: str | None
+    active: bool
+    created_at: datetime
+
+
+class TargetOut(ResponseModel):
+    id: str
+    org_id: str
+    project_id: str
+    name: str
+    kind: str
+    environment_type: str
+    base_url: str
+    owner: str
+    allowed_hosts: list[str]
+    credential_ref_id: str | None
+    active_authorization: AuthorizationOut | None
+    created_at: datetime
+    updated_at: datetime
+    version: int
+
+
+class RerunRequest(StrictModel):
+    """Rerun selected check engines of a finished job as a new job (regression check)."""
+
+    engines: list[str] = Field(min_length=1, max_length=20)
+    reason: str | None = Field(default=None, max_length=500)

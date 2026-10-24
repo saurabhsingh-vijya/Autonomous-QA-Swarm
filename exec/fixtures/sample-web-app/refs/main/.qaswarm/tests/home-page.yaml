@@ -1,0 +1,14 @@
+kind: browser
+name: home-page
+scenarios:
+  - name: counter and greeting
+    steps:
+      - { name: open home, goto: "/" }
+      - { name: title, expect: { title_contains: "Sample Target" } }
+      - { name: heading visible, expect: { visible: "#title" } }
+      - { name: click increment, click: "#inc" }
+      - { name: counter is 1, expect: { text: { selector: "#count", equals: "1" } } }
+      - { name: type name, fill: { selector: "#name", value: "QA Swarm" } }
+      - { name: press enter, press: { selector: "#name", key: Enter } }
+      - { name: greeting shown, expect: { text: { selector: "#greeting", contains: "Hello, QA Swarm" } } }
+      - { name: screenshot, screenshot: home-after-interaction }
