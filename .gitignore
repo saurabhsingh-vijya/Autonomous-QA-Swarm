@@ -33,3 +33,4 @@ Thumbs.db
 # Phase 2 local data
 data/
 backend/data/
+web/.vite/

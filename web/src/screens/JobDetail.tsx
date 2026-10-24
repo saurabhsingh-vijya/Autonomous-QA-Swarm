@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Ban, Check, Copy, ExternalLink, Pause, Play, Radio, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, reportHtmlUrl } from "../api/client";
+import { api, openHtmlReport, reportHtmlUrl } from "../api/client";
 import {
   useApprovePlan,
   useCancelJob,
@@ -541,6 +541,16 @@ export function JobDetailScreen() {
                   target="_blank"
                   rel="noreferrer"
                   className={buttonClass("secondary")}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void openHtmlReport(j.id).catch((err: unknown) =>
+                      toast({
+                        title: "The HTML report could not be opened",
+                        description: err instanceof Error ? err.message : String(err),
+                        kind: "error",
+                      }),
+                    );
+                  }}
                 >
                   <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open HTML report
                 </a>

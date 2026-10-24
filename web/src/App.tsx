@@ -6,6 +6,7 @@ import { AgentGraphScreen } from "./screens/AgentGraph";
 import { CompareRunsScreen } from "./screens/CompareRuns";
 import { DashboardScreen } from "./screens/Dashboard";
 import { DefectsScreen } from "./screens/Defects";
+import { EngineResultsScreen } from "./screens/EngineResults";
 import { ExecutionResultsScreen } from "./screens/ExecutionResults";
 import { JobDetailScreen } from "./screens/JobDetail";
 import { JobsScreen } from "./screens/Jobs";
@@ -29,6 +30,8 @@ const CUSTOM = new Set([
   "SCR-11",
   "SCR-14",
   "SCR-15",
+  "SCR-08",
+  "SCR-09",
 ]);
 
 export function App() {
@@ -54,6 +57,14 @@ export function App() {
               <Route
                 path="/results/api"
                 element={<ExecutionResultsScreen screen={screenById("SCR-07")} testType="api" />}
+              />
+              <Route
+                path="/security"
+                element={<EngineResultsScreen screen={screenById("SCR-08")} kind="security" />}
+              />
+              <Route
+                path="/performance"
+                element={<EngineResultsScreen screen={screenById("SCR-09")} kind="performance" />}
               />
               <Route path="/defects" element={<DefectsScreen />} />
               <Route path="/reports" element={<ReportsScreen />} />

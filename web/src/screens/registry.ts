@@ -109,11 +109,8 @@ export const SCREENS: ScreenDef[] = [
     path: "/security",
     group: "Results",
     icon: Shield,
-    purpose: "Present security scans and findings for triage.",
-    plannedSlice: "2a",
-    probePath: "/jobs/{job}/findings",
-    todayPath: "/jobs/new",
-    todayLabel: "Create a job",
+    purpose:
+      "Security engine runs (secret detection, read-only target hygiene checks) and the security findings derived from them; scanners for SAST, dependencies and IaC are slice 2a.",
   },
   {
     id: "SCR-09",
@@ -123,11 +120,7 @@ export const SCREENS: ScreenDef[] = [
     group: "Results",
     icon: Gauge,
     purpose:
-      "Configure bounded performance runs and analyze results against thresholds and baseline.",
-    plannedSlice: "3b",
-    probePath: "/jobs/{job}/performance-runs",
-    todayPath: "/jobs/new",
-    todayLabel: "Create a job",
+      "Bounded performance probe results against an authorised target; k6 load generation and performance runs are slice 3b.",
   },
   {
     id: "SCR-10",

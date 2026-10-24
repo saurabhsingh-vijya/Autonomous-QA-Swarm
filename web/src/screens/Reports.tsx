@@ -1,6 +1,7 @@
 import { Download, ExternalLink } from "lucide-react";
 import { Link } from "react-router-dom";
-import { reportHtmlUrl } from "../api/client";
+import { useState } from "react";
+import { openHtmlReport, reportHtmlUrl } from "../api/client";
 import { useQualityGates, useReport } from "../api/hooks";
 import type {
   FindingByPriority,
@@ -75,6 +76,7 @@ export function ReportsScreen() {
     | Record<string, number>
     | undefined;
   const reportChecks: ReportCheck[] = full?.checks ?? partialContent?.checks ?? [];
+  const [reportError, setReportError] = useState<string | null>(null);
 
   return (
     <div>
@@ -97,6 +99,13 @@ export function ReportsScreen() {
                 target="_blank"
                 rel="noreferrer"
                 className={buttonClass("secondary")}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setReportError(null);
+                  void openHtmlReport(jobId).catch((err: unknown) =>
+                    setReportError(err instanceof Error ? err.message : String(err)),
+                  );
+                }}
               >
                 <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open HTML report
               </a>
@@ -107,6 +116,12 @@ export function ReportsScreen() {
           ) : undefined
         }
       />
+
+      {reportError ? (
+        <p role="alert" className="mb-4 text-sm text-danger">
+          The HTML report could not be opened: {reportError}
+        </p>
+      ) : null}
 
       <div className="card mb-5 p-4">
         <JobSelect items={items} value={jobId} onChange={setJobId} loading={jobs.isLoading} />

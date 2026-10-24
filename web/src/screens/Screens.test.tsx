@@ -156,11 +156,11 @@ describe("not-available screens", () => {
   it("shows the planned slice returned by the API probe", async () => {
     mockFetchRoutes([
       ...baseRoutes(),
-      { match: /\/jobs\/job_0{26}\//, body: notImplemented("2a"), status: 501 },
+      { match: /\/jobs\/job_0{26}\//, body: notImplemented("3c"), status: 501 },
     ]);
-    renderWithProviders(<App />, { route: "/security" });
+    renderWithProviders(<App />, { route: "/mutation" });
     await screen.findByText("Not available in this build");
-    await screen.findByText("Planned for slice 2a");
+    await screen.findByText("Planned for slice 3c");
     await screen.findByText("not_implemented");
   });
 });

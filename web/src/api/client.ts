@@ -205,9 +205,29 @@ export const api = {
   listAgents: () => request<AgentRegistry>("/system/agents"),
 };
 
-/** Same-origin URL of the HTML report; the dev auth travels as query parameters like SSE. */
+/** Same-origin URL of the HTML report (dev auth is sent as headers, never in the URL). */
 export function reportHtmlUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/report?format=html&dev_user=${DEV_USER}&dev_role=${encodeURIComponent(DEV_ROLE)}`;
+  return `${API_BASE}/jobs/${jobId}/report?format=html`;
+}
+
+/**
+ * Open the self-contained HTML report in a new tab. A plain link cannot carry the dev-auth
+ * headers (query-string auth is accepted only for the SSE stream), so the report is fetched with
+ * the headers and shown from a blob URL. Throws an ApiError with the problem body on failure.
+ */
+export async function openHtmlReport(jobId: string): Promise<void> {
+  const res = await fetch(reportHtmlUrl(jobId), {
+    headers: {
+      Accept: "text/html",
+      "X-Dev-User": DEV_USER,
+      "X-Dev-Role": DEV_ROLE,
+      "X-Correlation-ID": uuid(),
+    },
+  });
+  if (!res.ok) throw new ApiError(await toProblem(res));
+  const url = URL.createObjectURL(await res.blob());
+  const tab = window.open(url, "_blank", "noopener");
+  if (!tab) window.location.assign(url); // popup blocked: show it in this tab instead
 }
 
 /**
