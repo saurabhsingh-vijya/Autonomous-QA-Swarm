@@ -31,6 +31,7 @@ class ReportOutput(AgentOutputModel):
     gates: list[GateResultModel]
     test_summary: dict[str, int]
     finding_summary: dict[str, int]
+    findings_by_priority: list[dict[str, Any]] = Field(default_factory=list)
     coverage: dict[str, Any]
     residual_risk: list[str]
     agents: list[dict[str, Any]]
@@ -80,13 +81,22 @@ class ReportingAgent:
         fsum: dict[str, int] = {}
         for f in findings:
             fsum[f["confidence"]] = fsum.get(f["confidence"], 0) + 1
+        rejected_statuses = {"false_positive", "duplicate", "not_reproducible"}
+        open_findings = [
+            f for f in findings if f.get("status", "candidate") not in rejected_statuses
+        ]
+        excluded = [f for f in findings if f.get("status", "candidate") in rejected_statuses]
+        accepted = [f for f in findings if f.get("status") == "accepted_risk"]
+        recurring = [f for f in open_findings if f.get("recurring")]
 
         open_conf_crit = sum(
-            1 for f in findings if f["confidence"] == "confirmed" and f["severity"] == "critical"
+            1
+            for f in open_findings
+            if f["confidence"] == "confirmed" and f["severity"] == "critical"
         )
         open_conf_high_sec = sum(
             1
-            for f in findings
+            for f in open_findings
             if f["confidence"] == "confirmed"
             and f["severity"] == "high"
             and str(f.get("category", "")).startswith("security")
@@ -193,6 +203,20 @@ class ReportingAgent:
             "Findings rest on single-run evidence; reproduction in fresh sandboxes arrives in slice 2b.",
             "Security, performance and mutation checks did not run (slices 2a, 3b, 3c).",
         ]
+        if excluded:
+            residual.append(
+                f"{len(excluded)} finding(s) excluded from gates by triage or suppression "
+                f"({', '.join(sorted({f['status'] for f in excluded}))}); they remain visible."
+            )
+        if accepted:
+            residual.append(
+                f"{len(accepted)} finding(s) carried as accepted risk (HA-08) with an expiry."
+            )
+        if recurring:
+            residual.append(
+                f"{len(recurring)} finding(s) recur from earlier jobs on this repository and are "
+                "still unresolved."
+            )
         residual += [w for w in up.get("warnings", []) if w not in residual]
         narrative = (
             f"RaOne executed {executed} API check(s) ({counts['passed']} passed, {counts['failed']} failed), "
@@ -204,7 +228,23 @@ class ReportingAgent:
             verdict_reason=reason,
             gates=gates,
             test_summary={**counts, "executed": executed},
-            finding_summary=fsum,
+            finding_summary={**fsum, "open": len(open_findings), "excluded": len(excluded)},
+            findings_by_priority=[
+                {
+                    "id": f.get("id"),
+                    "display_id": f.get("display_id"),
+                    "title": f.get("title"),
+                    "severity": f["severity"],
+                    "confidence": f["confidence"],
+                    "status": f.get("status", "candidate"),
+                    "dcs": f.get("dcs"),
+                    "risk_priority": f.get("risk_priority", 0.0),
+                }
+                for f in sorted(
+                    findings,
+                    key=lambda f: (-float(f.get("risk_priority", 0.0)), -int(f.get("dcs", 0))),
+                )
+            ],
             coverage={
                 "planned_scenarios": len(planned),
                 "p0": len(p0),

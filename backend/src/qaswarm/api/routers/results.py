@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from qaswarm.agents.registry import AGENT_CATALOGUE
 from qaswarm.api.auth import Principal, get_principal, require_role
 from qaswarm.api.deps import get_db
 from qaswarm.api.errors import Problem
+from qaswarm.api.etag import etag_for, parse_if_match
 from qaswarm.api.schemas import PlanApprovalRequest, ResponseModel
 from qaswarm.api.services.jobs import get_job_row
 from qaswarm.audit.chain import append_event
@@ -28,12 +29,14 @@ from qaswarm.db.models import (
     Approval,
     EvidenceItem,
     Finding,
+    Job,
     JobPlan,
     Report,
     Task,
     TaskAttempt,
     TestExecution,
 )
+from qaswarm.defects.triage import Actor, TriageError, apply_triage
 from qaswarm.domain.enums import JobState, Role
 from qaswarm.domain.ids import new_id
 from qaswarm.telemetry.logging import correlation_id_var
@@ -136,8 +139,28 @@ class FindingOut(ResponseModel):
     inferred: dict[str, Any]
     evidence_ids: dict[str, Any]
     test_execution_ids: dict[str, Any]
+    description: str
+    affected_tests: dict[str, Any]
+    reproducibility: dict[str, Any]
+    root_causes: dict[str, Any]
+    risk_priority: float
+    priority_breakdown: dict[str, Any]
+    history: dict[str, Any]
+    status_history: dict[str, Any]
+    triage: dict[str, Any]
+    duplicate_of: str | None
+    disputed: bool
     created_at: datetime
     version: int
+
+
+class TriageRequest(BaseModel):
+    action: Literal[
+        "mark_false_positive", "accept_risk", "mark_duplicate", "reopen", "request_reproduction"
+    ]
+    reason: str | None = None
+    duplicate_of: str | None = None
+    expires_at: datetime | None = None
 
 
 class EvidenceOut(ResponseModel):
@@ -311,15 +334,30 @@ def list_executions(
     return ListOut(items=[TestExecutionOut.model_validate(r) for r in rows], limit=len(rows))
 
 
+def _csv(value: str | None) -> list[str]:
+    return [v.strip() for v in (value or "").split(",") if v.strip()]
+
+
 @router.get("/jobs/{job_id}/findings", response_model=ListOut)
 def list_findings(
-    job_id: str, session: Session = Depends(get_db), principal: Principal = Depends(get_principal)
+    job_id: str,
+    severity: str | None = Query(default=None),
+    confidence: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
 ) -> ListOut:
+    """Findings sorted by risk priority (design 11/02), then DCS. Filters are comma-separated."""
     job = get_job_row(session, principal, job_id)
+    stmt = select(Finding).where(Finding.job_id == job.id)
+    if severity:
+        stmt = stmt.where(Finding.severity.in_(_csv(severity)))
+    if confidence:
+        stmt = stmt.where(Finding.confidence.in_(_csv(confidence)))
+    if status:
+        stmt = stmt.where(Finding.status.in_(_csv(status)))
     rows = (
-        session.execute(
-            select(Finding).where(Finding.job_id == job.id).order_by(Finding.dcs.desc())
-        )
+        session.execute(stmt.order_by(Finding.risk_priority.desc(), Finding.dcs.desc()))
         .scalars()
         .all()
     )
@@ -338,10 +376,71 @@ def _finding(session: Session, principal: Principal, finding_id: str) -> Finding
 @router.get("/findings/{finding_id}", response_model=FindingOut)
 def get_finding(
     finding_id: str,
+    response: Response,
     session: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ) -> FindingOut:
-    return FindingOut.model_validate(_finding(session, principal, finding_id))
+    f = _finding(session, principal, finding_id)
+    response.headers["ETag"] = etag_for(f.id, f.version)
+    return FindingOut.model_validate(f)
+
+
+@router.post("/findings/{finding_id}/triage", response_model=FindingOut)
+def triage_finding(
+    finding_id: str,
+    body: TriageRequest,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> FindingOut:
+    """Change a finding's status (FR-037). Roles and reasons are enforced in
+    ``qaswarm.defects.triage``; every change is audited and bumps the version/ETag."""
+    f = _finding(session, principal, finding_id)
+    expected = parse_if_match(if_match, f.id)
+    if expected is not None and expected != f.version:
+        raise Problem(412, "etag_mismatch", "The finding changed since you read it; re-read it.")
+    try:
+        apply_triage(
+            session,
+            f,
+            action=body.action,
+            actor=Actor(user_id=principal.user_id, role=principal.role),
+            reason=body.reason,
+            duplicate_of=body.duplicate_of,
+            expires_at=body.expires_at,
+            correlation_id=correlation_id_var.get(),
+        )
+    except TriageError as exc:
+        raise Problem(exc.status, exc.code, exc.detail, **exc.extra) from exc
+    response.headers["ETag"] = etag_for(f.id, f.version)
+    return FindingOut.model_validate(f)
+
+
+@router.get("/findings/{finding_id}/history", response_model=ListOut)
+def get_finding_history(
+    finding_id: str,
+    session: Session = Depends(get_db),
+    principal: Principal = Depends(get_principal),
+) -> ListOut:
+    """Every finding with the same fingerprint on the same repository, newest first."""
+    f = _finding(session, principal, finding_id)
+    job = session.get(Job, f.job_id)
+    rows = (
+        session.execute(
+            select(Finding)
+            .join(Job, Job.id == Finding.job_id)
+            .where(
+                Finding.org_id == f.org_id,
+                Finding.fingerprint == f.fingerprint,
+                Job.repository_id == (job.repository_id if job else None),
+            )
+            .order_by(Finding.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
+    return ListOut(items=[FindingOut.model_validate(r) for r in rows], limit=len(rows))
 
 
 @router.get("/findings/{finding_id}/evidence", response_model=ListOut)

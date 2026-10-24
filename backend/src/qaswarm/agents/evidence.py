@@ -13,6 +13,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from qaswarm.agents.base import AgentContext, AgentOutputModel, AgentResult, AgentTaskInput
+from qaswarm.defects.intelligence import root_cause_hypotheses
 from qaswarm.domain.enums import AgentKind
 
 
@@ -30,6 +31,10 @@ class FindingDraft(AgentOutputModel):
     inferred: list[str] = Field(default_factory=list)
     execution_refs: list[str]
     evidence_refs: list[str] = Field(default_factory=list)
+    description: str = ""
+    affected_tests: list[dict[str, Any]] = Field(default_factory=list)
+    reproducibility: dict[str, Any] = Field(default_factory=dict)
+    root_causes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvidenceOutput(AgentOutputModel):
@@ -51,6 +56,9 @@ class EvidenceAnalysisAgent:
 
     def run(self, task: AgentTaskInput, ctx: AgentContext) -> AgentResult:
         executions: list[dict[str, Any]] = list(task.upstream.get("executions", []))
+        evidence_by_id: dict[str, dict[str, Any]] = {
+            str(e.get("id")): e for e in task.upstream.get("evidence", []) if e.get("id")
+        }
         groups: dict[str, dict[str, Any]] = {}
         not_executed = {"skipped": 0, "blocked": 0, "timed_out": 0, "infrastructure_error": 0}
         for ex in executions:
@@ -75,9 +83,19 @@ class EvidenceAnalysisAgent:
                     "execution_refs": [],
                     "evidence_refs": [],
                     "name": ex.get("name", location),
+                    "tests": [],
                 },
             )
             g["execution_refs"].append(ex["id"])
+            g["tests"].append(
+                {
+                    "execution_id": ex["id"],
+                    "name": ex.get("name", location),
+                    "scenario_id": ex.get("scenario_id"),
+                    "status": status,
+                    "test_type": ex.get("test_type", "api"),
+                }
+            )
             if ex.get("evidence_id"):
                 g["evidence_refs"].append(ex["evidence_id"])
 
@@ -115,10 +133,34 @@ class EvidenceAnalysisAgent:
                 inferred.append(
                     "Inference: the route may be missing or the path differs from the contract."
                 )
+            linked_evidence = [evidence_by_id[i] for i in g["evidence_refs"] if i in evidence_by_id]
+            hypotheses = root_cause_hypotheses(
+                observed if isinstance(observed, int) else None,
+                g["expected"] if isinstance(g["expected"], int) else None,
+                linked_evidence,
+            )
+            description = (
+                f"{g['location'].get('method')} {g['location'].get('url')} returned HTTP {observed} "
+                f"while the contract expects {g['expected']}. Observed in "
+                f"{len(g['execution_refs'])} execution(s) of this job with "
+                f"{len(g['evidence_refs'])} captured HTTP exchange(s). Each execution remains "
+                "listed under affected_tests; grouping does not discard any result."
+            )
             findings.append(
                 FindingDraft(
                     fingerprint=fp,
                     category="api.contract",
+                    description=description,
+                    affected_tests=g["tests"],
+                    reproducibility={
+                        "attempted": False,
+                        "runs": 0,
+                        "reproduced": 0,
+                        "fresh_workers": False,
+                        "note": "Not reproduced: fresh-sandbox reproduction runs arrive in slice 2b. "
+                        "Recorded inputs (method, URL, expected status) allow a manual replay.",
+                    },
+                    root_causes=hypotheses,
                     title=f"{g['name']}: expected HTTP {g['expected']}, observed {observed}",
                     severity=severity,
                     confidence="probable" if dcs >= 50 else "candidate",

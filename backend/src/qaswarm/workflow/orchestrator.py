@@ -41,6 +41,7 @@ from qaswarm.db.models import (
     Task,
     TestExecution,
 )
+from qaswarm.defects.intelligence import carry_over_status, cross_run_history, risk_priority
 from qaswarm.domain.enums import TERMINAL_TASK_STATES, ErrorClass, JobState, TaskState
 from qaswarm.domain.ids import display_id, new_id
 from qaswarm.domain.state_machines import JobEvent, JobStateMachine
@@ -527,6 +528,22 @@ class Orchestrator:
             seq = int((org.settings or {}).get("finding_sequence", 0))
             for f in result.payload["findings"]:
                 seq += 1
+                history = cross_run_history(session, job, f["fingerprint"])
+                status, status_note = carry_over_status(history)
+                confidence = "rejected" if status == "false_positive" else f["confidence"]
+                priority, breakdown = risk_priority(f["severity"], confidence, "external")
+                facts = list(f["facts"])
+                if history["recurring"]:
+                    seen = history["prior_occurrences"][0]
+                    facts.append(
+                        f"Seen before: {history['times_seen_before']} earlier job(s) on this "
+                        f"repository, most recently {seen['display_id']} in job "
+                        f"{seen['job_display_id']} ({seen['status']})."
+                    )
+                inferred = list(f["inferred"])
+                if status_note:
+                    inferred.append(status_note)
+                now_iso = datetime.now(UTC).isoformat()
                 session.add(
                     Finding(
                         id=new_id("finding"),
@@ -536,17 +553,37 @@ class Orchestrator:
                         category=f["category"],
                         title=f["title"],
                         severity=f["severity"],
-                        status="candidate",
-                        confidence=f["confidence"],
+                        status=status,
+                        confidence=confidence,
                         dcs=f["dcs"],
                         dcs_breakdown=f["dcs_breakdown"],
                         fingerprint=f["fingerprint"],
                         location=f["location"],
                         occurrences=f["occurrences"],
-                        facts={"items": f["facts"]},
-                        inferred={"items": f["inferred"]},
+                        facts={"items": facts},
+                        inferred={"items": inferred},
                         evidence_ids={"items": f["evidence_refs"]},
                         test_execution_ids={"items": f["execution_refs"]},
+                        description=f.get("description", ""),
+                        affected_tests={"items": f.get("affected_tests", [])},
+                        reproducibility=f.get("reproducibility", {}),
+                        root_causes={"items": f.get("root_causes", [])},
+                        risk_priority=priority,
+                        priority_breakdown=breakdown,
+                        history=history,
+                        status_history={
+                            "items": [
+                                {
+                                    "from": None,
+                                    "to": status,
+                                    "action": "created",
+                                    "at": now_iso,
+                                    "actor_id": "AG-08",
+                                    "role": "agent",
+                                    "reason": status_note,
+                                }
+                            ]
+                        },
                     )
                 )
             org.settings = {**(org.settings or {}), "finding_sequence": seq}
@@ -634,6 +671,19 @@ class Orchestrator:
                 }
                 for e in execs
             ]
+            if task.task_type == "evidence.correlate":
+                ev_ids = [e.evidence_id for e in execs if e.evidence_id]
+                items = (
+                    session.execute(select(EvidenceItem).where(EvidenceItem.id.in_(ev_ids)))
+                    .scalars()
+                    .all()
+                    if ev_ids
+                    else []
+                )
+                up["evidence"] = [
+                    {"id": i.id, "kind": i.kind, "sha256": i.sha256, "content": i.content}
+                    for i in items
+                ]
         if task.task_type == "report.build":
             up["findings"] = [
                 {
@@ -644,8 +694,15 @@ class Orchestrator:
                     "confidence": f.confidence,
                     "dcs": f.dcs,
                     "title": f.title,
+                    "status": f.status,
+                    "risk_priority": float(f.risk_priority),
+                    "recurring": bool((f.history or {}).get("recurring")),
                 }
-                for f in session.execute(select(Finding).where(Finding.job_id == job.id)).scalars()
+                for f in session.execute(
+                    select(Finding)
+                    .where(Finding.job_id == job.id)
+                    .order_by(Finding.risk_priority.desc(), Finding.dcs.desc())
+                ).scalars()
             ]
             up["tasks"] = [
                 {

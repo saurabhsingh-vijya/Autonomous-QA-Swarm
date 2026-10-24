@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -412,6 +413,36 @@ class Finding(TimestampMixin, Base):
     inferred: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     evidence_ids: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
     test_execution_ids: Mapped[dict[str, Any]] = mapped_column(default=dict, nullable=False)
+    # Phase 5 defect intelligence (all derived from persisted results; never from model opinion).
+    description: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
+    affected_tests: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    reproducibility: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    root_causes: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    risk_priority: Mapped[float] = mapped_column(
+        Numeric(5, 2), default=0, server_default="0", nullable=False
+    )
+    priority_breakdown: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    history: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    status_history: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    triage: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default="{}", nullable=False
+    )
+    duplicate_of: Mapped[str | None] = mapped_column(String(40))
+    disputed: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
 

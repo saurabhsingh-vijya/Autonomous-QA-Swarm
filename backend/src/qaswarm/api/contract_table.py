@@ -52,7 +52,7 @@ CONTRACT: tuple[ContractEndpoint, ...] = (
     ContractEndpoint(
         "GET", "/findings/{finding_id}", "Finding with evidence references", "3", True
     ),
-    ContractEndpoint("POST", "/findings/{finding_id}/triage", "Change finding status", "2b"),
+    ContractEndpoint("POST", "/findings/{finding_id}/triage", "Change finding status", "5", True),
     ContractEndpoint("GET", "/findings/{finding_id}/evidence", "Evidence items", "3", True),
     ContractEndpoint("GET", "/jobs/{job_id}/performance-runs", "Performance runs", "3b"),
     ContractEndpoint("GET", "/jobs/{job_id}/mutation-runs", "Mutation runs", "3c"),
